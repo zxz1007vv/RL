@@ -1,0 +1,6 @@
+Wed Jun 24 18:11:08 2026
+WARNING: mju_openResource: unknown file '/home/track/桌面/HIMLoco_Go2W/resources/robots/go2w/mjcf/scene.xml'
+
+Thu Jun 25 09:40:39 2026
+WARNING: Nan, Inf or huge value in QACC at DOF 3. The simulation is unstable. Time = 346.1150.
+

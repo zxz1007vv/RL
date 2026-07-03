@@ -1,0 +1,58 @@
+paths:
+  scene_xml: "../resources/robots/zgwt/mjcf/scene.xml"
+  policy_path: "../logs/ZGWT/exported/policies/policy.pt"
+
+base_body: "BASE_LINK"
+
+joint_names:
+  - FAR_ABAD_JOINT
+  - FAR_HIP_JOINT
+  - FAR_KNEE_JOINT
+  - FAR_FOOT_JOINT
+  - FBL_ABAD_JOINT
+  - FBL_HIP_JOINT
+  - FBL_KNEE_JOINT
+  - FBL_FOOT_JOINT
+  - RAR_ABAD_JOINT
+  - RAR_HIP_JOINT
+  - RAR_KNEE_JOINT
+  - RAR_FOOT_JOINT
+  - RBL_ABAD_JOINT
+  - RBL_HIP_JOINT
+  - RBL_KNEE_JOINT
+  - RBL_FOOT_JOINT
+
+wheel_ids: [3, 7, 11, 15]
+
+default_dof_pos: [0.00, 0.8, -1.5, 0.00]
+crouch_dof_pos:  [0.00, 0.4, -0.8, 0.00]
+
+p_gains: [40.0, 40.0, 40.0, 0.0]
+d_gains: [1.0, 1.0, 1.0, 0.5]
+
+actions_scale: 0.15
+vel_scale: 10.0
+yaw_kp: 2.5
+
+scale_factors:
+  scale_lin_vel: 2.0
+  scale_ang_vel: 0.25
+  scale_dof_pos: 1.0
+  scale_dof_vel: 0.05
+
+sim_steps_per_loop: 4
+timestep: 0.005
+
+input:
+  source: "gamepad"
+  gamepad:
+    prefer_sdl_controller: true
+    device_index: 0
+    deadzone: 0.08
+    max_vx: 0.6
+    max_vy: 0.2
+    max_yaw_rate: 0.6
+    axis_left_x: 0
+    axis_left_y: 1
+    axis_right_x: 3
+    reset_button: 0

@@ -5,22 +5,37 @@ import mujoco.viewer
 import time
 import numpy as np
 from pynput import keyboard
+import argparse
+import os
 
 # ------------------ work ------------------ #
-with open("config.yaml", "r") as f:
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", default="config.yaml")
+args = parser.parse_args()
+config_path = os.path.abspath(args.config)
+config_dir = os.path.dirname(config_path)
+
+with open(config_path, "r") as f:
     cfg = yaml.safe_load(f)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 paths = cfg["paths"]
+for key, path in list(paths.items()):
+    if isinstance(path, str) and not os.path.isabs(path):
+        paths[key] = os.path.normpath(os.path.join(config_dir, path))
 joint_names = cfg["joint_names"]
 wheel_ids = cfg["wheel_ids"]
+base_body_name = cfg.get("base_body", "base_link")
 
-default_dof_pos = torch.tensor(cfg["default_dof_pos"] * 4, dtype=torch.float32, device=device)
-crouch_dof_pos  = torch.tensor(cfg["crouch_dof_pos"] * 4, dtype=torch.float32, device=device)
+def expand_dof_values(values):
+    return values * 4 if len(values) == 4 else values
+
+default_dof_pos = torch.tensor(expand_dof_values(cfg["default_dof_pos"]), dtype=torch.float32, device=device)
+crouch_dof_pos  = torch.tensor(expand_dof_values(cfg["crouch_dof_pos"]), dtype=torch.float32, device=device)
 
 # control
-p_gains = torch.tensor(cfg["p_gains"] * 4, dtype=torch.float32, device=device)
-d_gains = torch.tensor(cfg["d_gains"] * 4, dtype=torch.float32, device=device)
+p_gains = torch.tensor(expand_dof_values(cfg["p_gains"]), dtype=torch.float32, device=device)
+d_gains = torch.tensor(expand_dof_values(cfg["d_gains"]), dtype=torch.float32, device=device)
 actions_scale = cfg["actions_scale"]
 vel_scale = cfg["vel_scale"]
 yaw_kp = cfg["yaw_kp"]
@@ -172,7 +187,7 @@ def main():
             for _ in range(cfg["sim_steps_per_loop"]):
                 mujoco.mj_step(m, d)
             # camera on robot
-            viewer.cam.lookat[:] = d.xpos[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'base_link')]
+            viewer.cam.lookat[:] = d.xpos[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, base_body_name)]
             viewer.sync()
             time_until_next_step = m.opt.timestep*4 - (time.time() - step_start)
             if time_until_next_step > 0:

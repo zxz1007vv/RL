@@ -16,22 +16,24 @@ class ZGWTRoughCfg(LeggedRobotCfg):
         num_actions = 16
 
     class terrain(LeggedRobotCfg.terrain):
-        mesh_type = "trimesh"
+        mesh_type = "trimesh"   #地形网格类型 trimesh 三角网格；plane 平面；hightfield 高度场
+        curriculum = False     #地形学习开关
+        max_init_terrain_level = 0
         static_friction = 0.8
         dynamic_friction = 0.8
-        terrain_proportions = [0.1, 0.1, 0.35, 0.2, 0.25]
+        terrain_proportions = [1.0, 0.0, 0.0, 0.0, 0.0]
 
     class commands(LeggedRobotCfg.commands):
-        curriculum = True
-        max_curriculum = 1.5
-        num_commands = 4
-        resampling_time = 10.0
-        heading_command = True
+        curriculum = False    #命令学习开关
+        max_curriculum = 1.0    #命令学习最大课程值
+        num_commands = 4        #命令维度
+        resampling_time = 10.0    #命令重采样时间
+        heading_command = True    #是否使用航向命令
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]
-            lin_vel_y = [-0.6, 0.6]
-            ang_vel_yaw = [-1.0, 1.0]
+            lin_vel_x = [-0.6, 0.6]
+            lin_vel_y = [-0.2, 0.2]
+            ang_vel_yaw = [-0.6, 0.6]
             heading = [-3.14, 3.14]
 
     class init_state(LeggedRobotCfg.init_state):
@@ -69,7 +71,7 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             "KNEE_JOINT": 1.0,
             "FOOT_JOINT": 0.5,
         }
-        action_scale = 0.25
+        action_scale = 0.15
         vel_scale = 10.0
         decimation = 4
         wheel_speed = 1
@@ -89,7 +91,19 @@ class ZGWTRoughCfg(LeggedRobotCfg):
         ]
         self_collisions = 1
         replace_cylinder_with_capsule = False
-        flip_visual_attachments = True
+        flip_visual_attachments = False #可视化坐标翻转
+
+    class domain_rand(LeggedRobotCfg.domain_rand):   #域随机化配置
+        randomize_payload_mass = True
+        randomize_com_displacement = True
+        randomize_friction = True
+        randomize_motor_strength = True
+        randomize_kp = True
+        randomize_kd = True
+        randomize_initial_joint_pos = True
+        disturbance = True
+        push_robots = True
+        delay = True
 
     class rewards(LeggedRobotCfg.rewards):
         class scales:
@@ -103,10 +117,10 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             stand_still = -0.5
             collision = -1.0
             feet_stumble = -0.1
-            action_rate = -0.01
+            action_rate = -0.03
             torques = -5.0e-4
-            dof_vel = -1.0e-7
-            dof_acc = -1.0e-7
+            dof_vel = -2.0e-7
+            dof_acc = -2.0e-7
             run_still = -0.05
 
         only_positive_rewards = True
@@ -119,15 +133,21 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
 
 class ZGWTRoughCfgPPO(LeggedRobotCfgPPO):
+    class policy(LeggedRobotCfgPPO.policy):
+        init_noise_std = 0.6
+
     class algorithm(LeggedRobotCfgPPO.algorithm):
         entropy_coef = 0.005
+        learning_rate = 3.0e-4
+        schedule = "fixed"
+        desired_kl = 0.02
 
     class runner(LeggedRobotCfgPPO.runner):
-        save_interval = 1000
-        num_steps_per_env = 48
-        max_iterations = 20000
+        save_interval = 100   #保存间隔
+        num_steps_per_env = 48   #每个环境的步数
+        max_iterations = 10000   #最大迭代次数
         experiment_name = "ZGWT"
-        run_name = ""
+        run_name = "stable_start"    #运行名称
         resume = None
         load_run = -1
         checkpoint = -1

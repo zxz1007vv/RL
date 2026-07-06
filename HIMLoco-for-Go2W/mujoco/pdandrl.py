@@ -38,7 +38,10 @@ p_gains = torch.tensor(expand_dof_values(cfg["p_gains"]), dtype=torch.float32, d
 d_gains = torch.tensor(expand_dof_values(cfg["d_gains"]), dtype=torch.float32, device=device)
 actions_scale = cfg["actions_scale"]
 vel_scale = cfg["vel_scale"]
-yaw_kp = cfg["yaw_kp"]
+commands_cfg = cfg.get("commands", {})
+command_mode = commands_cfg.get("mode", "heading")
+command_ranges = commands_cfg.get("ranges", {})
+yaw_kp = commands_cfg.get("yaw_kp", cfg.get("yaw_kp", 2.5))
 
 scale_factors = cfg["scale_factors"]
 input_cfg = cfg.get("input", {})
@@ -98,6 +101,30 @@ def get_obs(actions, default_dof_pos, commands):
         actions
     ], dim=-1)
 
+def clamp_command(value, name):
+    limits = command_ranges.get(name)
+    if limits is None:
+        return value
+    return float(np.clip(value, limits[0], limits[1]))
+
+def prepare_commands(raw_commands):
+    commands = [
+        clamp_command(raw_commands[0], "lin_vel_x"),
+        clamp_command(raw_commands[1], "lin_vel_y"),
+        raw_commands[2],
+    ]
+    if command_mode == "heading":
+        base_quat = get_sensor_data("imu_quat")
+        q_w, q_x, q_y, q_z = base_quat
+        yaw_now = torch.atan2(2*(q_w*q_z + q_x*q_y), 1 - 2*(q_y*q_y + q_z*q_z))
+        yaw_target = torch.tensor(commands[2], device=device, dtype=torch.float32)
+        yaw_err = torch.atan2(torch.sin(yaw_target - yaw_now), torch.cos(yaw_target - yaw_now))
+        commands[2] = clamp_command((yaw_kp * yaw_err).item(), "ang_vel_yaw")
+        return commands, yaw_now.item()
+
+    commands[2] = clamp_command(commands[2], "ang_vel_yaw")
+    return commands, None
+
 def main():
     global control_mode
     control_mode = 0 # 0 -> Damping  1 -> PD   2 -> RL
@@ -147,15 +174,11 @@ def main():
 
             # rl control
             if control_mode == 2:
-                kb_cmd = get_cmd()
-                commands = kb_cmd
-                base_quat = get_sensor_data("imu_quat")
-                q_w, q_x, q_y, q_z = base_quat
-                yaw_now = torch.atan2(2*(q_w*q_z + q_x*q_y), 1 - 2*(q_y*q_y + q_z*q_z))
-                yaw_err = torch.atan2(torch.sin(commands[2] - yaw_now), torch.cos(commands[2] - yaw_now))
-                commands[2] = yaw_kp * yaw_err
-                print(f"\rRL cmd: vx={commands[0]:+4.1f}  "f"vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}  "
-                f"yaw_now={yaw_now:+4.2f}", end='')
+                commands, yaw_now = prepare_commands(get_cmd())
+                status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}"
+                if yaw_now is not None:
+                    status += f"  yaw_now={yaw_now:+4.2f}"
+                print(status, end='')
             else:
                 commands = [0., 0., 0.]
             # pd control
@@ -189,7 +212,7 @@ def main():
             # camera on robot
             viewer.cam.lookat[:] = d.xpos[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, base_body_name)]
             viewer.sync()
-            time_until_next_step = m.opt.timestep*4 - (time.time() - step_start)
+            time_until_next_step = m.opt.timestep * cfg["sim_steps_per_loop"] - (time.time() - step_start)
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)
 

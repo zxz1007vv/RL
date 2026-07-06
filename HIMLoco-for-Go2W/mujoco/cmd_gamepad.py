@@ -16,7 +16,7 @@ class CmdGenerator:
     Default command mapping:
     - left stick up/down: forward/backward velocity
     - left stick left/right: lateral velocity
-    - right stick left/right: accumulated yaw target
+    - right stick left/right: yaw rate or accumulated yaw target
     - A button: reset all commands
     """
 
@@ -35,6 +35,7 @@ class CmdGenerator:
         self.max_vx = float(cfg.get("max_vx", 1.0))
         self.max_vy = float(cfg.get("max_vy", 0.5))
         self.max_yaw_rate = float(cfg.get("max_yaw_rate", 1.0))
+        self.yaw_mode = cfg.get("yaw_mode", "heading")
         self.prefer_sdl_controller = bool(cfg.get("prefer_sdl_controller", True))
         self.axis_left_x = int(cfg.get("axis_left_x", 0))
         self.axis_left_y = int(cfg.get("axis_left_y", 1))
@@ -73,6 +74,15 @@ class CmdGenerator:
 
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+
+    def _pump_events(self):
+        try:
+            self.pygame.event.pump()
+        except self.pygame.error as exc:
+            if "video system not initialized" not in str(exc):
+                raise
+            self.pygame.display.init()
+            self.pygame.event.pump()
 
     def _try_open_sdl_controller(self):
         if not self.prefer_sdl_controller:
@@ -120,7 +130,7 @@ class CmdGenerator:
 
     def _loop(self):
         while self._running:
-            self.pygame.event.pump()
+            self._pump_events()
 
             if self.use_controller:
                 # SDL Controller mapping is standardized, especially useful for F710 in XInput mode.
@@ -142,7 +152,10 @@ class CmdGenerator:
             with self._lock:
                 self.vx = -left_y * self.max_vx
                 self.vy = -left_x * self.max_vy
-                self.yaw_target += -right_x * self.max_yaw_rate * self.update_dt
+                if self.yaw_mode == "yaw_rate":
+                    self.yaw_target = -right_x * self.max_yaw_rate
+                else:
+                    self.yaw_target += -right_x * self.max_yaw_rate * self.update_dt
 
                 if reset_pressed:
                     self.vx = 0.0

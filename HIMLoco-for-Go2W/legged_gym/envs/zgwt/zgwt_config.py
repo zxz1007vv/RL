@@ -17,23 +17,23 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = "trimesh"   #地形网格类型 trimesh 三角网格；plane 平面；hightfield 高度场
-        curriculum = False     #地形学习开关
+        curriculum = True     #地形学习开关
         max_init_terrain_level = 0
         static_friction = 0.8
         dynamic_friction = 0.8
-        terrain_proportions = [1.0, 0.0, 0.0, 0.0, 0.0]
+        terrain_proportions = [0.4, 0.2, 0.2, 0.1, 0.1] # 地形类型比例 [光滑坡, 粗糙坡, 上楼梯, 下楼梯, 随机离散地形]
 
     class commands(LeggedRobotCfg.commands):
-        curriculum = False    #命令学习开关
+        curriculum = True    #命令学习开关
         max_curriculum = 1.0    #命令学习最大课程值
         num_commands = 4        #命令维度
         resampling_time = 10.0    #命令重采样时间
-        heading_command = True    #是否使用航向命令
+        heading_command = False    #是否使用航向命令
 
-        class ranges:
-            lin_vel_x = [-0.6, 0.6]
+        class ranges:  #初始命令范围，课程设置的最大值
+            lin_vel_x = [-0.4, 0.4]
             lin_vel_y = [-0.2, 0.2]
-            ang_vel_yaw = [-0.6, 0.6]
+            ang_vel_yaw = [-0.5, 0.5]
             heading = [-3.14, 3.14]
 
     class init_state(LeggedRobotCfg.init_state):
@@ -71,10 +71,10 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             "KNEE_JOINT": 1.0,
             "FOOT_JOINT": 0.5,
         }
-        action_scale = 0.15
-        vel_scale = 10.0
-        decimation = 4
-        wheel_speed = 1
+        action_scale = 0.15  #动作尺度
+        vel_scale = 10.0     #速度尺度
+        decimation = 4        #采样间隔
+        wheel_speed = 1       #轮速
 
     class asset(LeggedRobotCfg.asset):
         file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/zgwt/urdf/zgwt.urdf"
@@ -143,11 +143,11 @@ class ZGWTRoughCfgPPO(LeggedRobotCfgPPO):
         desired_kl = 0.02
 
     class runner(LeggedRobotCfgPPO.runner):
-        save_interval = 100   #保存间隔
+        save_interval = 500   #保存间隔
         num_steps_per_env = 48   #每个环境的步数
-        max_iterations = 10000   #最大迭代次数
+        max_iterations = 20000   #最大迭代次数
         experiment_name = "ZGWT"
-        run_name = "stable_start"    #运行名称
+        run_name = "V1"    #运行名称
         resume = None
         load_run = -1
         checkpoint = -1

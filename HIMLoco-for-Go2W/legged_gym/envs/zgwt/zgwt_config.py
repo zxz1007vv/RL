@@ -71,7 +71,7 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             "KNEE_JOINT": 1.0,
             "FOOT_JOINT": 0.5,
         }
-        action_scale = 0.15  #动作尺度
+        action_scale = 0.25  #动作尺度
         vel_scale = 10.0     #速度尺度
         decimation = 4        #采样间隔
         wheel_speed = 1       #轮速
@@ -117,7 +117,7 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             stand_still = -0.5
             collision = -1.0
             feet_stumble = -0.1
-            action_rate = -0.03
+            action_rate = -0.01
             torques = -5.0e-4
             dof_vel = -2.0e-7
             dof_acc = -2.0e-7

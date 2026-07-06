@@ -216,6 +216,14 @@ class LeggedRobot(BaseTask):
             self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
         if self.cfg.commands.curriculum:
             self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
+        # Instant diagnostics for command tracking and control effort.
+        self.extras["episode"]["mean_lin_vel_x"] = torch.mean(self.base_lin_vel[:, 0])
+        self.extras["episode"]["mean_cmd_x"] = torch.mean(self.commands[:, 0])
+        self.extras["episode"]["mean_abs_lin_vel_error"] = torch.mean(torch.abs(self.commands[:, 0] - self.base_lin_vel[:, 0]))
+        self.extras["episode"]["mean_abs_yaw_error"] = torch.mean(torch.abs(self.commands[:, 2] - self.base_ang_vel[:, 2]))
+        self.extras["episode"]["mean_action_abs"] = torch.mean(torch.abs(self.actions))
+        self.extras["episode"]["mean_action_rate_abs"] = torch.mean(torch.abs(self.actions - self.last_actions))
+        self.extras["episode"]["mean_torque_abs"] = torch.mean(torch.abs(self.torques))
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf
@@ -487,7 +495,7 @@ class LeggedRobot(BaseTask):
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
-        self.commands[env_ids, 0] = torch_rand_float(-1.0, 1.0, (len(env_ids), 1), device=self.device).squeeze(1)
+        self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         if self.cfg.commands.heading_command:
             self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)

@@ -30,7 +30,7 @@ crouch_dof_pos:  [0.00, 0.4, -0.8, 0.00]
 p_gains: [40.0, 40.0, 40.0, 0.0]
 d_gains: [1.0, 1.0, 1.0, 0.5]
 
-actions_scale: 0.15
+actions_scale: 0.25
 vel_scale: 10.0
 
 commands:

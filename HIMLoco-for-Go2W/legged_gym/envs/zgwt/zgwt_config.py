@@ -214,7 +214,7 @@ class ZGWTRoughCfgPPO(LeggedRobotCfgPPO):
         desired_kl = 0.02
 
     class runner(LeggedRobotCfgPPO.runner):
-        save_interval = 500   #保存间隔
+        save_interval = 1000   #保存间隔
         num_steps_per_env = 48   #每个环境的步数
         max_iterations = 20000   #最大迭代次数
         experiment_name = "ZGWT"

@@ -5,8 +5,8 @@
   <default>
     <default class="zgwt">
       <geom friction="0.8 0.02 0.01" margin="0.001" condim="3"/>
-      <joint damping="0.1" armature="0.01" frictionloss="0.0"/>
-      <motor ctrlrange="-180 180"/>
+      <joint damping="0.1" armature="0.01" frictionloss="0.2"/>
+      <motor ctrlrange="-35.55 35.55"/>
       <default class="visual">
         <geom type="mesh" contype="0" conaffinity="0" group="2" mass="0"/>
       </default>

@@ -1,7 +1,7 @@
 paths:
   scene_xml: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/resources/robots/go2w/mjcf/scene.xml"
-  #policy_path: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/logs/GO2W/exported/policies/policy_best.pt"
-  policy_path: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/logs/GO2W/exported/policies/policy_2000.pt"
+  policy_path: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/logs/GO2W/exported/policies/policy_best.pt"
+  #policy_path: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/logs/GO2W/exported/policies/policy_2000.pt"
   #policy_path: "/home/user/PROJECT/RL/HIMLoco-for-Go2W/logs/ZGWT/exported/policies/policy.pt"
 joint_names:
   - FL_hip_joint

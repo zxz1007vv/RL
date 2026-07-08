@@ -18,8 +18,8 @@
   </asset>
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true" />
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" />
-    <geom name="floor2" size="100 100 0.05" type="box" pos="0 0 -0.051" material="groundplane" />
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" friction="0.8 0.02 0.01" />
+    <geom name="floor2" size="100 100 0.05" type="box" pos="0 0 -0.051" material="groundplane" friction="0.8 0.02 0.01" />
     <geom pos="1.5 0.0 0.1" type="box" size="0.5 0.75 0.1" quat="1.0 0.0 0.0 0.0" />
     <geom pos="1.5 0.0 0.25" type="cylinder" size="0.5 0.25 0.25" quat="1.0 0.0 0.0 0.0" />
     <geom pos="2.0 2.0 0.5" type="box" size="1.5 0.75 0.05"

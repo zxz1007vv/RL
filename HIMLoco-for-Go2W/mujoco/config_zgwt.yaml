@@ -1,46 +1,112 @@
 paths:
   scene_xml: "../resources/robots/zgwt/mjcf/scene.xml"
-  policy_path: "../logs/ZGWT/exported/policies/policy_7.6.pt"
+  policy_path: "../logs/ZGWT/exported/policies/7.7_v1_plane.pt"
 
 base_body: "BASE_LINK"
+base_pos: [0.0, 0.0, 0.55]
+startup_pose: "default"
 
-joint_names:
-  - FAR_ABAD_JOINT
-  - FAR_HIP_JOINT
-  - FAR_KNEE_JOINT
-  - FAR_FOOT_JOINT
-  - FBL_ABAD_JOINT
-  - FBL_HIP_JOINT
-  - FBL_KNEE_JOINT
-  - FBL_FOOT_JOINT
-  - RAR_ABAD_JOINT
-  - RAR_HIP_JOINT
-  - RAR_KNEE_JOINT
-  - RAR_FOOT_JOINT
-  - RBL_ABAD_JOINT
-  - RBL_HIP_JOINT
-  - RBL_KNEE_JOINT
-  - RBL_FOOT_JOINT
+joints:
+  - name: FAR_ABAD_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 90.0
+    kd: 1.0
+  - name: FAR_HIP_JOINT
+    default: 0.6
+    crouch: 0.4
+    kp: 120.0
+    kd: 1.0
+  - name: FAR_KNEE_JOINT
+    default: -1.2
+    crouch: -0.8
+    kp: 120.0
+    kd: 1.0
+  - name: FAR_FOOT_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 60.0
+    kd: 0.2
+    wheel: true
 
-wheel_ids: [3, 7, 11, 15]
+  - name: FBL_ABAD_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 90.0
+    kd: 1.0
+  - name: FBL_HIP_JOINT
+    default: 0.6
+    crouch: 0.4
+    kp: 120.0
+    kd: 1.0
+  - name: FBL_KNEE_JOINT
+    default: -1.2
+    crouch: -0.8
+    kp: 120.0
+    kd: 1.0
+  - name: FBL_FOOT_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 60.0
+    kd: 0.2
+    wheel: true
 
-default_dof_pos: [0.00, 0.8, -1.5, 0.00]
-crouch_dof_pos:  [0.00, 0.4, -0.8, 0.00]
+  - name: RAR_ABAD_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 90.0
+    kd: 1.0
+  - name: RAR_HIP_JOINT
+    default: -0.6
+    crouch: -0.4
+    kp: 120.0
+    kd: 1.0
+  - name: RAR_KNEE_JOINT
+    default: 1.2
+    crouch: 0.8
+    kp: 120.0
+    kd: 1.0
+  - name: RAR_FOOT_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 60.0
+    kd: 0.2
+    wheel: true
 
-p_gains: [40.0, 40.0, 40.0, 0.0]
-d_gains: [1.0, 1.0, 1.0, 0.5]
+  - name: RBL_ABAD_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 90.0
+    kd: 1.0
+  - name: RBL_HIP_JOINT
+    default: -0.6
+    crouch: -0.4
+    kp: 120.0
+    kd: 1.0
+  - name: RBL_KNEE_JOINT
+    default: 1.2
+    crouch: 0.8
+    kp: 120.0
+    kd: 1.0
+  - name: RBL_FOOT_JOINT
+    default: 0.0
+    crouch: 0.0
+    kp: 60.0
+    kd: 0.2
+    wheel: true
 
 actions_scale: 0.25
 vel_scale: 10.0
+wheel_control: "torque"
 
 commands:
   # Match ZGWTRoughCfg.commands.heading_command = False:
   # [vx, vy, wz] are sent directly to the policy.
   mode: "yaw_rate"
   ranges:
-    lin_vel_x: [-0.4, 0.4]
-    lin_vel_y: [-0.2, 0.2]
-    ang_vel_yaw: [-0.5, 0.5]
+    lin_vel_x: [-1.0, 1.0]
+    lin_vel_y: [-0.6, 0.6]
+    ang_vel_yaw: [-1.0, 1.0]
   # Used only when mode = "heading".
   yaw_kp: 2.5
 
@@ -50,8 +116,8 @@ scale_factors:
   scale_dof_pos: 1.0
   scale_dof_vel: 0.05
 
-sim_steps_per_loop: 4
-timestep: 0.005
+sim_steps_per_loop: 5
+timestep: 0.002
 
 input:
   source: "gamepad"
@@ -60,10 +126,12 @@ input:
     device_index: 0
     deadzone: 0.08
     yaw_mode: "yaw_rate"
-    max_vx: 0.4
-    max_vy: 0.2
-    max_yaw_rate: 0.5
+    max_vx: 1.0
+    max_vy: 0.6
+    max_yaw_rate: 1.0
     axis_left_x: 0
     axis_left_y: 1
     axis_right_x: 3
-    reset_button: 0
+    start_button: 0  # A
+    stop_button: 1   # B
+    reset_button: 2  # X

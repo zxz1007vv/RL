@@ -17,7 +17,9 @@ class CmdGenerator:
     - left stick up/down: forward/backward velocity
     - left stick left/right: lateral velocity
     - right stick left/right: yaw rate or accumulated yaw target
-    - A button: reset all commands
+    - configured reset button: reset all commands
+    - configured start button: request RL mode
+    - configured stop button: request zero-torque mode
     """
 
     def __init__(self, cfg=None):
@@ -41,11 +43,16 @@ class CmdGenerator:
         self.axis_left_y = int(cfg.get("axis_left_y", 1))
         self.axis_right_x = int(cfg.get("axis_right_x", 3))
         self.reset_button = int(cfg.get("reset_button", 0))
+        self.start_button = int(cfg.get("start_button", 0))
+        self.stop_button = int(cfg.get("stop_button", 1))
         self.update_dt = float(cfg.get("update_dt", 0.02))
 
         self.vx = 0.0
         self.vy = 0.0
         self.yaw_target = 0.0
+        self.mode_request = None
+        self._last_start_pressed = False
+        self._last_stop_pressed = False
         self._lock = threading.Lock()
         self._running = True
         self.controller = None
@@ -138,7 +145,9 @@ class CmdGenerator:
                 left_x = self._get_controller_axis(0)
                 left_y = self._get_controller_axis(1)
                 right_x = self._get_controller_axis(2)
-                reset_pressed = self._get_controller_button(0)
+                reset_pressed = self._get_controller_button(self.reset_button)
+                start_pressed = self._get_controller_button(self.start_button)
+                stop_pressed = self._get_controller_button(self.stop_button)
             else:
                 # Raw Joystick fallback. Axis IDs are configured in config.yaml.
                 left_x = self._get_joystick_axis(self.axis_left_x)
@@ -147,6 +156,14 @@ class CmdGenerator:
                 reset_pressed = (
                     self.reset_button < self.joystick.get_numbuttons()
                     and self.joystick.get_button(self.reset_button)
+                )
+                start_pressed = (
+                    self.start_button < self.joystick.get_numbuttons()
+                    and self.joystick.get_button(self.start_button)
+                )
+                stop_pressed = (
+                    self.stop_button < self.joystick.get_numbuttons()
+                    and self.joystick.get_button(self.stop_button)
                 )
 
             with self._lock:
@@ -162,8 +179,24 @@ class CmdGenerator:
                     self.vy = 0.0
                     self.yaw_target = 0.0
 
+                if start_pressed and not self._last_start_pressed:
+                    self.mode_request = "rl"
+                if stop_pressed and not self._last_stop_pressed:
+                    self.mode_request = "zero"
+                    self.vx = 0.0
+                    self.vy = 0.0
+                    self.yaw_target = 0.0
+                self._last_start_pressed = start_pressed
+                self._last_stop_pressed = stop_pressed
+
             time.sleep(self.update_dt)
 
     def get_cmd(self):
         with self._lock:
             return [self.vx, self.vy, self.yaw_target]
+
+    def pop_mode_request(self):
+        with self._lock:
+            request = self.mode_request
+            self.mode_request = None
+            return request

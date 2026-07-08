@@ -1235,9 +1235,12 @@ class LeggedRobot(BaseTask):
         return torch.sum(torch.square(self.torques), dim=1)
 
     def _reward_dof_vel(self):
-        # Penalize dof velocities
-        self.dof_vel[:,self.wheel_indices] = 0
-        return torch.sum(torch.square(self.dof_vel), dim=1)
+        # Penalize joint velocities without mutating self.dof_vel.
+        # Wheel velocities are ignored for this reward, but must remain available
+        # for observations, torque control, and last_dof_vel updates.
+        dof_vel = self.dof_vel.clone()
+        dof_vel[:, self.wheel_indices] = 0
+        return torch.sum(torch.square(dof_vel), dim=1)
     
     def _reward_dof_acc(self):
         # Penalize dof accelerations

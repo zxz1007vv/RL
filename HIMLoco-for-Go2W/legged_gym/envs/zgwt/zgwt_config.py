@@ -16,7 +16,7 @@ class ZGWTRoughCfg(LeggedRobotCfg):
         num_actions = 16
 
     class terrain(LeggedRobotCfg.terrain):
-        mesh_type = "trimesh"   #地形网格类型 trimesh 三角网格；plane 平面；hightfield 高度场
+        mesh_type = "plane"   #地形网格类型 trimesh 三角网格；plane 平面；hightfield 高度场
         curriculum = True     #地形学习开关
         max_init_terrain_level = 0
         static_friction = 0.8
@@ -25,56 +25,127 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
     class commands(LeggedRobotCfg.commands):
         curriculum = True    #命令学习开关
-        max_curriculum = 1.0    #命令学习最大课程值
+        max_curriculum = 1.5    #命令学习最大课程值
         num_commands = 4        #命令维度
         resampling_time = 10.0    #命令重采样时间
         heading_command = False    #是否使用航向命令
 
         class ranges:  #初始命令范围，课程设置的最大值
-            lin_vel_x = [-0.4, 0.4]
-            lin_vel_y = [-0.2, 0.2]
-            ang_vel_yaw = [-0.5, 0.5]
+            lin_vel_x = [-1, 1]
+            lin_vel_y = [-0.6, 0.6]
+            ang_vel_yaw = [-1, 1]
             heading = [-3.14, 3.14]
 
     class init_state(LeggedRobotCfg.init_state):
-        pos = [0.0, 0.0, 0.45]
+        pos = [0.0, 0.0, 0.55]   #初始位置，出生位置，比期望的基座高度0.54略高即可；
         default_joint_angles = {
-            "FAR_ABAD_JOINT": 0.0,
-            "FAR_HIP_JOINT": 0.8,
-            "FAR_KNEE_JOINT": -1.5,
-            "FAR_FOOT_JOINT": 0.0,
-            "FBL_ABAD_JOINT": 0.0,
-            "FBL_HIP_JOINT": 0.8,
-            "FBL_KNEE_JOINT": -1.5,
-            "FBL_FOOT_JOINT": 0.0,
-            "RAR_ABAD_JOINT": 0.0,
-            "RAR_HIP_JOINT": 0.8,
-            "RAR_KNEE_JOINT": -1.5,
-            "RAR_FOOT_JOINT": 0.0,
-            "RBL_ABAD_JOINT": 0.0,
-            "RBL_HIP_JOINT": 0.8,
-            "RBL_KNEE_JOINT": -1.5,
-            "RBL_FOOT_JOINT": 0.0,
+            # "FAR_ABAD_JOINT": 0.0,
+            # "FAR_HIP_JOINT": 0.8,
+            # "FAR_KNEE_JOINT": -1.5,
+            # "FAR_FOOT_JOINT": 0.0,
+            # "FBL_ABAD_JOINT": 0.0,
+            # "FBL_HIP_JOINT": 0.8,
+            # "FBL_KNEE_JOINT": -1.5,
+            # "FBL_FOOT_JOINT": 0.0,
+            # "RAR_ABAD_JOINT": 0.0,
+            # "RAR_HIP_JOINT": 0.8,
+            # "RAR_KNEE_JOINT": -1.5,
+            # "RAR_FOOT_JOINT": 0.0,
+            # "RBL_ABAD_JOINT": 0.0,
+            # "RBL_HIP_JOINT": 0.8,
+            # "RBL_KNEE_JOINT": -1.5,
+            # "RBL_FOOT_JOINT": 0.0,
+
+            #对姿 狗
+            'FBL_ABAD_JOINT': -0.0,
+            'FAR_ABAD_JOINT': 0.0,
+            'RBL_ABAD_JOINT': -0.0,
+            'RAR_ABAD_JOINT': 0.0,
+
+            'FBL_HIP_JOINT': 0.6,
+            'FAR_HIP_JOINT': 0.6,
+            'RBL_HIP_JOINT': -0.6,
+            'RAR_HIP_JOINT': -0.6,
+
+            'FBL_KNEE_JOINT': -1.2,
+            'FAR_KNEE_JOINT': -1.2,
+            'RBL_KNEE_JOINT': 1.2,
+            'RAR_KNEE_JOINT': 1.2,
+
+            'FBL_FOOT_JOINT': 0.0,
+            'FAR_FOOT_JOINT': 0.0,
+            'RBL_FOOT_JOINT': 0.0,
+            'RAR_FOOT_JOINT': 0.0,
         }
 
     class control(LeggedRobotCfg.control):
-        control_type = "P"
+        # control_type = "P"
+        # stiffness = {
+        #     "ABAD_JOINT": 40.0,
+        #     "HIP_JOINT": 40.0,
+        #     "KNEE_JOINT": 40.0,
+        #     "FOOT_JOINT": 0.0,
+        # }
+        # damping = {
+        #     "ABAD_JOINT": 1.0,
+        #     "HIP_JOINT": 1.0,
+        #     "KNEE_JOINT": 1.0,
+        #     "FOOT_JOINT": 0.5,
+        # }
+
+        control_type = 'P'
         stiffness = {
-            "ABAD_JOINT": 40.0,
-            "HIP_JOINT": 40.0,
-            "KNEE_JOINT": 40.0,
-            "FOOT_JOINT": 0.0,
+        'FBL_ABAD_JOINT': 90,
+        'FAR_ABAD_JOINT': 90,
+        'RBL_ABAD_JOINT': 90,
+        'RAR_ABAD_JOINT': 90,
+
+        'FBL_HIP_JOINT': 120,
+        'FAR_HIP_JOINT': 120,
+        'RBL_HIP_JOINT': 120,
+        'RAR_HIP_JOINT': 120,
+
+        'FBL_KNEE_JOINT': 120,
+        'FAR_KNEE_JOINT': 120,
+        'RBL_KNEE_JOINT': 120,
+        'RAR_KNEE_JOINT': 120,
+
+        'FBL_FOOT_JOINT': 60,
+        'FAR_FOOT_JOINT': 60,
+        'RBL_FOOT_JOINT': 60,
+        'RAR_FOOT_JOINT': 60,
         }
         damping = {
-            "ABAD_JOINT": 1.0,
-            "HIP_JOINT": 1.0,
-            "KNEE_JOINT": 1.0,
-            "FOOT_JOINT": 0.5,
+        'FBL_ABAD_JOINT': 1,
+        'FAR_ABAD_JOINT': 1,
+        'RBL_ABAD_JOINT': 1,
+        'RAR_ABAD_JOINT': 1,
+
+        'FBL_HIP_JOINT': 1,
+        'FAR_HIP_JOINT': 1,
+        'RBL_HIP_JOINT': 1,
+        'RAR_HIP_JOINT': 1,
+
+        'FBL_KNEE_JOINT': 1,
+        'FAR_KNEE_JOINT': 1,
+        'RBL_KNEE_JOINT': 1,
+        'RAR_KNEE_JOINT': 1,
+
+        'FBL_FOOT_JOINT': 0.2,
+        'FAR_FOOT_JOINT': 0.2,
+        'RBL_FOOT_JOINT': 0.2,
+        'RAR_FOOT_JOINT': 0.2,
+    
         }
+
+
         action_scale = 0.25  #动作尺度
         vel_scale = 10.0     #速度尺度
-        decimation = 4        #采样间隔
+        decimation = 5        #采样间隔
         wheel_speed = 1       #轮速
+
+    class sim(LeggedRobotCfg.sim):  #对应真机控制频率
+        dt = 0.002
 
     class asset(LeggedRobotCfg.asset):
         file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/zgwt/urdf/zgwt.urdf"
@@ -107,28 +178,28 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
     class rewards(LeggedRobotCfg.rewards):
         class scales:
-            tracking_lin_vel = 1.5
-            tracking_ang_vel = 0.75
-            lin_vel_z = -1.0
-            ang_vel_xy = -0.05
-            orientation = -0.5
-            base_height = -10.0
-            hip_default = -0.5
-            stand_still = -0.5
+            tracking_lin_vel = 3  #1.5
+            tracking_ang_vel = 1.5  #0.75
+            lin_vel_z = -0.05      #-1.0
+            ang_vel_xy = -0.01    #-0.05
+            orientation = -0.25   #-0.5
+            base_height = -2.0   # -10.0
+            hip_default = -0.1   #0.5
+            stand_still = -0.1    #-0.5
             collision = -1.0
             feet_stumble = -0.1
-            action_rate = -0.01
-            torques = -5.0e-4
+            action_rate = -0.002    #-0.01
+            torques = -1.0e-5      #-5.0e-4
             dof_vel = -2.0e-7
-            dof_acc = -2.0e-7
-            run_still = -0.05
+            dof_acc = -2.0e-8     #-2.0e-7
+            run_still = -0.01    #-0.05
 
         only_positive_rewards = True
         tracking_sigma = 0.25
         soft_dof_pos_limit = 1.0
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 1.0
-        base_height_target = 0.4
+        base_height_target = 0.54  #大狗的基座高度目标
         max_contact_force = 100.0
 
 

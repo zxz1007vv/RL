@@ -148,6 +148,7 @@ class LeggedRobot(BaseTask):
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
+        self.last_torques[:] = self.torques[:]
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self._draw_debug_vis()
@@ -190,6 +191,7 @@ class LeggedRobot(BaseTask):
         self.last_actions[env_ids] = 0.
         self.last_last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
+        self.last_torques[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
         self.reset_buf[env_ids] = 1
 
@@ -231,9 +233,17 @@ class LeggedRobot(BaseTask):
         self.episode_length_buf[env_ids] = 0
     
     def compute_reward(self):
-        """ Compute rewards
-            Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
-            adds each terms to the episode sums and to the total reward
+        """计算当前 step 的总 reward。
+
+        计算逻辑：
+        1. _prepare_reward_function() 会读取 cfg.rewards.scales 里所有非 0 的项。
+        2. 例如 config 里有 orientation = -0.8，就会寻找 self._reward_orientation()。
+        3. 每个 reward 函数先返回一个“原始值 raw_reward”，shape = [num_envs]。
+        4. 这里再乘以 config 里的 scale，并累加到 self.rew_buf：
+              final_term = raw_reward * scale * self.dt
+           注意 scale 已经在 _prepare_reward_function() 里提前乘过 self.dt。
+        5. 正权重一般表示鼓励项，负权重一般表示惩罚项。
+        6. 如果 only_positive_rewards=True，总 reward 最后会被裁剪到 >= 0。
         """
         self.rew_buf[:] = 0.
         for i in range(len(self.reward_functions)):
@@ -702,6 +712,7 @@ class LeggedRobot(BaseTask):
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_torques = torch.zeros_like(self.torques)
         self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -768,17 +779,29 @@ class LeggedRobot(BaseTask):
 
 
     def _prepare_reward_function(self):
-        """ Prepares a list of reward functions, whcih will be called to compute the total reward.
-            Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
+        """根据 cfg.rewards.scales 准备要调用的 reward 函数列表。
+
+        config 和函数的对应关系：
+            cfg.rewards.scales.orientation      -> self._reward_orientation()
+            cfg.rewards.scales.tracking_lin_vel -> self._reward_tracking_lin_vel()
+            cfg.rewards.scales.mechanical_power -> self._reward_mechanical_power()
+
+        只有 scale 非 0 的项才会启用；如果 legged_robot.py 里写了某个
+        _reward_xxx()，但 cfg.rewards.scales 里没有 xxx，或者 xxx = 0，
+        这个 reward 函数就不会参与训练。
+
+        这里会把每个 scale 先乘以 self.dt，使 reward 近似按真实时间积分。
+        例如 sim.dt=0.002, decimation=5，则 self.dt=0.01。
+        config 里的 orientation=-0.8 实际每 step 使用的是 -0.8 * 0.01。
         """
-        # remove zero scales + multiply non-zero ones by dt
+        # 删除 scale 为 0 的项；非 0 项乘以控制周期 dt。
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]
             if scale==0:
                 self.reward_scales.pop(key) 
             else:
                 self.reward_scales[key] *= self.dt
-        # prepare list of functions
+        # 根据 reward 名字动态查找对应函数：xxx -> self._reward_xxx。
         self.reward_functions = []
         self.reward_names = []
         for name, scale in self.reward_scales.items():
@@ -788,7 +811,7 @@ class LeggedRobot(BaseTask):
             name = '_reward_' + name
             self.reward_functions.append(getattr(self, name))
 
-        # reward episode sums
+        # 记录每个 episode 内每个 reward 分项的累计值，用于 TensorBoard 里的 Episode/rew_xxx。
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
 
@@ -1174,100 +1197,196 @@ class LeggedRobot(BaseTask):
 
         return feet_height
 
-    #------------ reward functions----------------
-    def _reward_tracking_lin_vel(self):
-        # Tracking of linear velocity commands (xy axes)
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
-    
-    def _reward_tracking_ang_vel(self):
-        # Tracking of angular velocity commands (yaw) 
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
-    
-    def _reward_lin_vel_z(self):
-        # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2])
-    
-    def _reward_ang_vel_xy(self):
-        # Penalize xy axes base angular velocity
-        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
-    
+    # ------------ reward functions: basic posture ----------------
     def _reward_orientation(self):
-        # Penalize non flat base orientation
+        # 基本姿态：惩罚机身倾斜。
+        # projected_gravity[:, :2] 越大，说明机身 roll/pitch 越偏离水平。
+        # config 中 orientation 为负数，因此倾斜越大，总 reward 越低。
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
 
     def _reward_base_height(self):
-        # Penalize base height away from target
+        # 基本姿态：惩罚机身高度偏离目标高度。
+        # measured_heights 是地形高度，root_states[:, 2] - measured_heights 得到相对地面的机身高度。
+        # config 中 base_height 为负数，因此偏离 base_height_target 越多，惩罚越大。
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
         return torch.square(base_height - self.cfg.rewards.base_height_target)
         
     def _reward_hip_default(self):
+        # 基本姿态：惩罚髋关节偏离默认姿态。
+        # 这里假设 [0, 4, 8, 12] 是四条腿的 ABAD/HIP 侧摆相关关节。
+        # 作用是减少横向速度或启停时髋部过度张开/内收导致的机身晃动。
         hip_err = torch.sum((self.dof_pos[:, [0, 4, 8, 12]] - self.default_dof_pos[:, [0, 4, 8, 12]]) ** 2, dim = 1)
-        # print("penalty",penalty.shape)
         return hip_err
+    
+    # ------------ reward functions: stability ----------------
+    def _reward_lin_vel_z(self):
+        # 稳定：惩罚机身上下方向速度。
+        # 值越大说明机器人上下跳动越明显；负权重会让策略减少弹跳。
+        return torch.square(self.base_lin_vel[:, 2])
+    
+    def _reward_ang_vel_xy(self):
+        # 稳定：惩罚 roll/pitch 角速度。
+        # 对你说的 vy 跟踪时身体倾斜、晃动，这一项很关键。
+        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
 
+    def _reward_action_rate(self):
+        # 稳定：惩罚相邻两个策略 step 的动作变化。
+        # 负权重越大，动作越平滑，但太大可能导致启动慢、跟踪变差。
+        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
+
+    def _reward_collision(self):
+        # 稳定/安全：惩罚非足端部位发生接触。
+        # penalised_contact_indices 来自 cfg.asset.penalize_contacts_on。
+        # ABAD/HIP/KNEE/BASE 等部位碰地会增加原始惩罚。
+        return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
+
+    # ------------ reward functions: tracking ----------------
+    def _reward_tracking_lin_vel(self):
+        # Tracking：奖励 xy 平面线速度跟踪。
+        # lin_vel_error 越小，exp(-error/sigma) 越接近 1。
+        # config 中 tracking_lin_vel 是正数，因此跟踪越准 reward 越大。
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+
+    def _reward_tracking_lin_vx(self):
+        # Tracking：奖励 x 方向线速度跟踪。
+        # lin_vel_error 越小，exp(-error/sigma) 越接近 1。
+        lin_vel_error = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+
+    def _reward_tracking_lin_vy(self):
+        # Tracking：奖励 y 方向线速度跟踪。
+        # lin_vel_error 越小，exp(-error/sigma) 越接近 1。
+        lin_vel_error = torch.square(self.commands[:, 1] - self.base_lin_vel[:, 1])
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+
+    
+    def _reward_tracking_ang_vel(self):
+        # Tracking：奖励 yaw 角速度跟踪。
+        # commands[:, 2] 是期望 yaw rate，base_ang_vel[:, 2] 是实际 yaw rate。
+        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
+    
+    # ------------ reward functions: gait and contact ----------------
     def _reward_stand_still(self):
-        # Penalize motion at zero commands        
+        # 步态/接触：低速或零速命令时，惩罚腿部关节偏离默认姿态。
+        # 作用是让机器人停止时收腿、站稳，减少暂停时抬腿。
+        # wheel_indices 被排除，因为轮子角度不应该被拉回默认值。
         dof_err = self.dof_pos - self.default_dof_pos
         dof_err[:,self.wheel_indices] = 0
         return torch.sum(torch.abs(dof_err), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
     
-    def _reward_torques(self):
-        # Penalize torques
-        return torch.sum(torch.square(self.torques), dim=1)
-
-    def _reward_collision(self):
-        # Penalize collisions on selected bodies
-        return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
-    
     def _reward_feet_stumble(self):
-        # Penalize feet hitting vertical surfaces
+        # 步态/接触：惩罚足端/轮足撞到竖直障碍或发生明显侧向碰撞。
+        # 当水平接触力远大于竖直接触力时，认为发生 stumble。
         return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) >\
              3.0 *torch.abs(self.contact_forces[:, self.feet_indices, 2]), dim=1)
+
+    def _reward_feet_contact(self):
+        # 步态/接触：惩罚轮足离地。
+        # 对轮腿机器人，轮足通常应该保持接地；离地会导致启动/暂停时扬腿和重心晃动。
+        # contact_forces[..., 2] < 5N 认为该足端没有有效竖直接触。
+        no_contact = self.contact_forces[:, self.feet_indices, 2] < 5.0
+        return torch.sum(no_contact.float(), dim=1)
         
-    def _reward_action_rate(self):
-        # Penalize changes in actions
-        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
-            
+    def _reward_run_still(self):
+        # 步态/接触：有速度命令时，轻微惩罚腿部关节偏离默认姿态。
+        # 作用是防止跑起来后腿部姿态过度夸张；权重太大会限制步态探索。
+        dof_err = self.dof_pos - self.default_dof_pos
+        dof_err[:,self.wheel_indices] = 0
+        return torch.sum(torch.abs(dof_err), dim=1) * (torch.norm(self.commands[:, :2], dim=1) > 0.1)
+
+    # ------------ reward functions: low power and smoothness ----------------
     def _reward_torques(self):
-        # Penalize torques
+        # Low power：惩罚力矩平方和。
+        # 力矩越大，原始值越大；配负权重后会鼓励策略少用力。
         return torch.sum(torch.square(self.torques), dim=1)
 
+    def _reward_mechanical_power(self):
+        # Low power：惩罚机械功率近似值 |tau * qdot|。
+        # torques 是关节力矩，dof_vel 是关节速度；二者乘积近似关节功率。
+        # 相比只惩罚力矩，这项会额外抑制“高速度 + 大力矩”的耗能动作。
+        return torch.sum(torch.abs(self.torques * self.dof_vel), dim=1)
+
+    def _reward_diagonal_power_balance(self):
+        # Low power / gait symmetry：惩罚两组对角腿功率不一致。
+        # 对角站姿/对角支撑的轮腿机器人，FBL+RAR 与 FAR+RBL 的功率更接近时，
+        # 通常动作会更协调，重心也更不容易左右晃。
+        # 注意：横移 vy 和 yaw 转向本来就需要一定左右差异，所以该项权重要轻。
+        power = torch.abs(self.torques * self.dof_vel)
+        if not hasattr(self, "leg_dof_indices"):
+            self.leg_dof_indices = {}
+            for leg_name in ["FBL", "FAR", "RBL", "RAR"]:
+                indices = [i for i, name in enumerate(self.dof_names) if name.startswith(leg_name + "_")]
+                self.leg_dof_indices[leg_name] = torch.tensor(indices, dtype=torch.long, device=self.device)
+
+        leg_power = {}
+        for leg_name, indices in self.leg_dof_indices.items():
+            if indices.numel() == 0:
+                leg_power[leg_name] = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+            else:
+                leg_power[leg_name] = torch.sum(power[:, indices], dim=1)
+
+        diag_a = leg_power["FBL"] + leg_power["RAR"]
+        diag_b = leg_power["FAR"] + leg_power["RBL"]
+        return torch.square(diag_a - diag_b)
+
+    def _reward_torque_rate(self):
+        # Low power / smoothness：惩罚相邻策略 step 的力矩突变。
+        # 作用是减少电机力矩尖峰，让动作更柔顺，也能降低实际硬件冲击。
+        return torch.sum(torch.square(self.torques - self.last_torques), dim=1)
+
+    def _reward_action_smoothness(self):
+        # Low power / smoothness：惩罚动作二阶差分，也就是动作“加速度/jerk”。
+        # 与 action_rate 不同，这项更关注动作变化趋势是否突然拐弯。
+        # 对启动、暂停时的抽动和突然抬腿通常有帮助。
+        return torch.sum(torch.square(self.actions - 2 * self.last_actions + self.last_last_actions), dim=1)
+            
     def _reward_dof_vel(self):
-        # Penalize joint velocities without mutating self.dof_vel.
-        # Wheel velocities are ignored for this reward, but must remain available
-        # for observations, torque control, and last_dof_vel updates.
+        # Low power / smoothness：惩罚腿部关节速度。
+        # 注意这里 clone 一份再把 wheel_indices 清零，避免修改 self.dof_vel 本体。
+        # 轮足速度不参与该惩罚，因为轮子转动本身是正常运动。
         dof_vel = self.dof_vel.clone()
         dof_vel[:, self.wheel_indices] = 0
         return torch.sum(torch.square(dof_vel), dim=1)
+
+    def _reward_dof_vel_wheel(self):
+        # Low power / smoothness：单独惩罚轮足关节速度。
+        # 轮子需要转动，所以这个项应该比腿部 dof_vel 更轻；
+        # 作用是避免轮子无效高速空转，让真机能耗和轮胎冲击更小。
+        return torch.sum(torch.square(self.dof_vel[:, self.wheel_indices]), dim=1)
     
     def _reward_dof_acc(self):
-        # Penalize dof accelerations
-        return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
+        # Low power / smoothness：惩罚腿部关节加速度。
+        # dof_acc = (上一 step 关节速度 - 当前关节速度) / 控制周期。
+        # 轮足加速度被排除，避免轮子速度变化主导该惩罚项。
+        dof_acc = (self.last_dof_vel - self.dof_vel) / self.dt
+        dof_acc[:, self.wheel_indices] = 0
+        return torch.sum(torch.square(dof_acc), dim=1)
     
+    # ------------ reward functions: limits ----------------
     def _reward_dof_pos_limits(self):
-        # Penalize dof positions too close to the limit
+        # Limits：惩罚关节位置超过软限制。
+        # soft_dof_pos_limit 控制软限制占 URDF joint limit 的比例。
         out_of_limits = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.) # lower limit
         out_of_limits += (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.)
         return torch.sum(out_of_limits, dim=1)
 
     def _reward_dof_vel_limits(self):
-        # Penalize dof velocities too close to the limit
-        # clip to max error = 1 rad/s per joint to avoid huge penalties
+        # Limits：惩罚关节速度超过软速度限制。
+        # 单个关节最大惩罚 clip 到 1，避免速度偶发尖峰让该项过大。
         return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
 
     def _reward_torque_limits(self):
-        # penalize torques too close to the limit
+        # Limits：惩罚力矩接近或超过软力矩限制。
+        # 如果策略长期打满力矩，这项会变大。
         return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
 
     def _reward_feet_contact_forces(self):
-        # penalize high contact forces
+        # Limits：惩罚足端接触力过大。
+        # 用于减少落脚冲击或轮足撞地；超过 max_contact_force 的部分才计入。
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
-        
-    def _reward_run_still(self):
-        # Penalize motion at running commands        
-        dof_err = self.dof_pos - self.default_dof_pos
-        dof_err[:,self.wheel_indices] = 0
-        return torch.sum(torch.abs(dof_err), dim=1) * (torch.norm(self.commands[:, :2], dim=1) > 0.1)
+
+
+    
     

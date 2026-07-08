@@ -178,21 +178,38 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
     class rewards(LeggedRobotCfg.rewards):
         class scales:
-            tracking_lin_vel = 3  #1.5
-            tracking_ang_vel = 1.5  #0.75
-            lin_vel_z = -0.05      #-1.0
-            ang_vel_xy = -0.01    #-0.05
-            orientation = -0.25   #-0.5
-            base_height = -2.0   # -10.0
-            hip_default = -0.1   #0.5
-            stand_still = -0.1    #-0.5
+            # 基本姿态：先让机身高度、姿态和默认关节姿态稳定下来。
+            orientation = -1.0
+            base_height = -3.0
+            hip_default = -0.15
+
+            # 稳定：抑制上下跳、roll/pitch 角速度、动作突变和过大力矩。
+            lin_vel_z = -0.2
+            ang_vel_xy = -0.1
+            action_rate = -0.003
+            dof_vel = -1.0e-7
+            dof_vel_wheel = -1.0e-5
+            dof_acc = -1.0e-8
             collision = -1.0
+
+            # Low power：降低力矩、机械功率和控制突变，让步态更省力、更顺。
+            torques = -1.0e-5
+            mechanical_power = -5.0e-5
+            diagonal_power_balance = -1.0e-4
+            torque_rate = -5.0e-7
+            action_smoothness = -0.0015
+
+            # Tracking：vx/vy 分开调，避免 xy 合并项和单轴项重复计分。
+            tracking_lin_vel = 0.0
+            tracking_lin_vx = 1.5
+            tracking_lin_vy = 2.0
+            tracking_ang_vel = 1.0
+
+            # 步态/接触：轮足车尽量保持轮足接地，减少启停时扬腿和重心晃动。
+            stand_still = -0.2
+            run_still = -0.02
+            feet_contact = -0.15
             feet_stumble = -0.1
-            action_rate = -0.002    #-0.01
-            torques = -1.0e-5      #-5.0e-4
-            dof_vel = -2.0e-7
-            dof_acc = -2.0e-8     #-2.0e-7
-            run_still = -0.01    #-0.05
 
         only_positive_rewards = True
         tracking_sigma = 0.25

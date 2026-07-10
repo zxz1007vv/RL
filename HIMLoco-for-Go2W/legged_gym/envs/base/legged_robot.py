@@ -637,8 +637,17 @@ class LeggedRobot(BaseTask):
         high_vel_env_ids = (env_ids < (self.num_envs * 0.2))
         low_vel_env_ids = env_ids[low_vel_env_ids.nonzero(as_tuple=True)]
         high_vel_env_ids = env_ids[high_vel_env_ids.nonzero(as_tuple=True)]
+        if len(low_vel_env_ids) == 0 or len(high_vel_env_ids) == 0:
+            return
+
+        tracking_reward_name = "tracking_lin_vel"
+        if tracking_reward_name not in self.episode_sums:
+            tracking_reward_name = "tracking_lin_vx"
+        if tracking_reward_name not in self.episode_sums:
+            return
+
         # If the tracking reward is above 80% of the maximum, increase the range of commands
-        if (torch.mean(self.episode_sums["tracking_lin_vel"][low_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales["tracking_lin_vel"]) and (torch.mean(self.episode_sums["tracking_lin_vel"][high_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales["tracking_lin_vel"]):
+        if (torch.mean(self.episode_sums[tracking_reward_name][low_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales[tracking_reward_name]) and (torch.mean(self.episode_sums[tracking_reward_name][high_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales[tracking_reward_name]):
             self.command_ranges["lin_vel_x"][0] = np.clip(self.command_ranges["lin_vel_x"][0] - 0.2, -self.cfg.commands.max_curriculum, 0.)
             self.command_ranges["lin_vel_x"][1] = np.clip(self.command_ranges["lin_vel_x"][1] + 0.2, 0., self.cfg.commands.max_curriculum)
 
@@ -1217,6 +1226,11 @@ class LeggedRobot(BaseTask):
         # 作用是减少横向速度或启停时髋部过度张开/内收导致的机身晃动。
         hip_err = torch.sum((self.dof_pos[:, [0, 4, 8, 12]] - self.default_dof_pos[:, [0, 4, 8, 12]]) ** 2, dim = 1)
         return hip_err
+
+    def _reward_joint_default(self):
+        dof_err = self.dof_pos - self.default_dof_pos
+        dof_err[:, self.wheel_indices] = 0
+        return torch.sum(torch.square(dof_err), dim=1)
     
     # ------------ reward functions: stability ----------------
     def _reward_lin_vel_z(self):

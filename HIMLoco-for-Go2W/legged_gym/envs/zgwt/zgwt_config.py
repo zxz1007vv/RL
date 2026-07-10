@@ -179,9 +179,10 @@ class ZGWTRoughCfg(LeggedRobotCfg):
     class rewards(LeggedRobotCfg.rewards):
         class scales:
             # 基本姿态：先让机身高度、姿态和默认关节姿态稳定下来。
-            orientation = -1.0
-            base_height = -3.0
-            hip_default = -0.15
+            orientation = -1.5   #-1
+            base_height = -6.0 #-3.0
+            hip_default = -0.4  #-0.15
+            joint_default = -0.4
 
             # 稳定：抑制上下跳、roll/pitch 角速度、动作突变和过大力矩。
             lin_vel_z = -0.2
@@ -201,14 +202,14 @@ class ZGWTRoughCfg(LeggedRobotCfg):
 
             # Tracking：vx/vy 分开调，避免 xy 合并项和单轴项重复计分。
             tracking_lin_vel = 0.0
-            tracking_lin_vx = 1.5
+            tracking_lin_vx = 2.0
             tracking_lin_vy = 2.0
             tracking_ang_vel = 1.0
 
             # 步态/接触：轮足车尽量保持轮足接地，减少启停时扬腿和重心晃动。
             stand_still = -0.2
-            run_still = -0.02
-            feet_contact = -0.15
+            run_still = -0.08     #-0.02
+            feet_contact = -0.25   #-0.15
             feet_stumble = -0.1
 
         only_positive_rewards = True

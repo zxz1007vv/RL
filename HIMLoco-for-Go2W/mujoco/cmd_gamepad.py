@@ -19,7 +19,7 @@ class CmdGenerator:
     - right stick left/right: yaw rate or accumulated yaw target
     - configured reset button: reset all commands
     - configured start button: request RL mode
-    - configured stop button: request zero-torque mode
+    - configured stop button: request PD-hold mode
     """
 
     def __init__(self, cfg=None):
@@ -182,7 +182,7 @@ class CmdGenerator:
                 if start_pressed and not self._last_start_pressed:
                     self.mode_request = "rl"
                 if stop_pressed and not self._last_stop_pressed:
-                    self.mode_request = "zero"
+                    self.mode_request = "pd"
                     self.vx = 0.0
                     self.vy = 0.0
                     self.yaw_target = 0.0

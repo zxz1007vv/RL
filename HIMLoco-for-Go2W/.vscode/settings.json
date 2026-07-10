@@ -1,5 +1,5 @@
 {
-    "cmake.sourceDirectory": "/home/ubuntu/zskj/RL/HIMLoco-for-Go2W/resources/robots/zgwt",
+    "cmake.sourceDirectory": "/home/user/PROJECT/RL/HIMLoco-for-Go2W/resources/robots/zgwt",
     "python.defaultInterpreterPath": "/home/ubuntu/miniconda3/envs/jitou/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda"

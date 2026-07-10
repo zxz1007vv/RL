@@ -25,6 +25,11 @@ wheel_ids: [3, 7, 11, 15]
 
 default_dof_pos: [0.00, 0.8, -1.5, 0.00]  
 crouch_dof_pos:  [0.00, 0.4, -0.8, 0.00]   
+# Fixed PD hold posture, between crouch and the RL nominal posture.
+pd_hold_dof_pos: [0.00, 0.6, -1.15, 0.00]
+pd_hold_p_gains: [30.0, 35.0, 35.0, 0.0]
+pd_hold_d_gains: [1.5, 2.0, 2.0, 0.5]
+pd_transition_time: 0.5
 
 p_gains: [40.0, 40.0, 40.0, 0.0]
 d_gains: [1.0, 1.0, 1.0, 0.5]

@@ -32,7 +32,7 @@ else:
     wheel_ids = cfg["wheel_ids"]
 base_body_name = cfg.get("base_body", "base_link")
 base_pos = cfg.get("base_pos")
-startup_pose = cfg.get("startup_pose", "crouch")
+pd_transition_time = max(0.0, float(cfg.get("pd_transition_time", 0.5)))
 
 def expand_dof_values(values):
     return values * 4 if len(values) == 4 else values
@@ -45,9 +45,32 @@ def get_dof_values(key, legacy_key):
 default_dof_pos = torch.tensor(get_dof_values("default", "default_dof_pos"), dtype=torch.float32, device=device)
 crouch_dof_pos  = torch.tensor(get_dof_values("crouch", "crouch_dof_pos"), dtype=torch.float32, device=device)
 
+if "pd_hold_dof_pos" in cfg:
+    pd_hold_dof_pos = torch.tensor(
+        expand_dof_values(cfg["pd_hold_dof_pos"]), dtype=torch.float32, device=device
+    )
+elif joints_cfg and all("pd_hold" in joint for joint in joints_cfg):
+    pd_hold_dof_pos = torch.tensor(
+        [joint["pd_hold"] for joint in joints_cfg], dtype=torch.float32, device=device
+    )
+else:
+    raise ValueError(
+        "Define an explicit PD hold pose with pd_hold_dof_pos, or pd_hold for every joint."
+    )
+
 # control
 p_gains = torch.tensor(get_dof_values("kp", "p_gains"), dtype=torch.float32, device=device)
 d_gains = torch.tensor(get_dof_values("kd", "d_gains"), dtype=torch.float32, device=device)
+pd_p_gains = torch.tensor(
+    expand_dof_values(cfg.get("pd_hold_p_gains", p_gains.detach().cpu().tolist())),
+    dtype=torch.float32,
+    device=device,
+)
+pd_d_gains = torch.tensor(
+    expand_dof_values(cfg.get("pd_hold_d_gains", d_gains.detach().cpu().tolist())),
+    dtype=torch.float32,
+    device=device,
+)
 actions_scale = cfg["actions_scale"]
 vel_scale = cfg["vel_scale"]
 wheel_control = cfg.get("wheel_control", "velocity")
@@ -156,7 +179,10 @@ def apply_ctrl(act):
 
 def main():
     global control_mode
-    control_mode = 0 # 0 -> Zero torque  1 -> PD stand  2 -> RL
+    control_mode = 1 # 1 -> PD hold  2 -> RL
+    pd_target_dof_pos = pd_hold_dof_pos.clone()
+    pd_transition_start = None
+    pd_transition_elapsed = pd_transition_time
 
     # load policy
     try:
@@ -167,29 +193,31 @@ def main():
         policy = None
         print("Fail to load policy network", e)
 
-    startup_dof_pos = default_dof_pos if startup_pose == "default" else crouch_dof_pos
     for i, name in enumerate(joint_names):
         jnt_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
-        d.qpos[m.jnt_qposadr[jnt_id]] = startup_dof_pos[i].item()
+        d.qpos[m.jnt_qposadr[jnt_id]] = pd_hold_dof_pos[i].item()
     if base_pos is not None:
         d.qpos[:3] = np.asarray(base_pos, dtype=np.float64)
     d.qvel[:] = 0.0
     mujoco.mj_forward(m, d)
-    print("Zero torque mode......")
-    print("Gamepad: A -> RL   B -> zero torque")
-    print("Keyboard fallback: 1 -> PD stand   2 -> RL")
+    print("PD hold mode ......")
+    print("Gamepad: A -> RL   B -> PD hold")
+    print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
     obs_buffer = torch.zeros((6, 57), device=device)
 
     # control by keyboard
     def on_press(key):
-        nonlocal actions, obs_buffer
+        nonlocal actions, obs_buffer, pd_target_dof_pos, pd_transition_start, pd_transition_elapsed
         global control_mode
         try:
-            if key.char == '1' and control_mode == 0:
+            if key.char == '1':
+                pd_transition_start = None
+                pd_transition_elapsed = pd_transition_time
+                pd_target_dof_pos = pd_hold_dof_pos.clone()
                 control_mode = 1
-                print(" PD mode ......")
+                print(" PD hold mode ......")
             elif key.char == '2' and policy is not None:
                 actions = torch.zeros(16, device=device)
                 obs_buffer = fill_obs_buffer(actions, [0., 0., 0.])
@@ -204,6 +232,9 @@ def main():
     # running
     with mujoco.viewer.launch_passive(m, d) as viewer:
         while viewer.is_running():
+            dof_pos = torch.cat([get_sensor_data(n+"_pos") for n in joint_names]).to(device)
+            dof_vel = torch.cat([get_sensor_data(n+"_vel") for n in joint_names]).to(device)
+
             mode_request = pop_mode_request()
             if mode_request == "rl":
                 if policy is not None:
@@ -213,16 +244,18 @@ def main():
                     print("\n RL mode ......")
                 else:
                     print("\nCannot enter RL mode: policy is not loaded")
-            elif mode_request == "zero":
+            elif mode_request == "pd":
                 actions = torch.zeros(16, device=device)
                 obs_buffer = torch.zeros((6, 57), device=device)
-                control_mode = 0
-                print("\n Zero torque mode ......")
+                # Blend from the RL exit pose to the fixed PD target instead of
+                # applying a large position error in one simulation step.
+                pd_transition_start = dof_pos.clone()
+                pd_transition_elapsed = 0.0
+                control_mode = 1
+                print("\n PD hold mode ......")
 
-            dof_pos = torch.cat([get_sensor_data(n+"_pos") for n in joint_names]).to(device)
-            dof_vel = torch.cat([get_sensor_data(n+"_vel") for n in joint_names]).to(device)
-            dof_err = default_dof_pos - dof_pos
-            dof_err[wheel_ids] = 0.0
+            rl_dof_err = default_dof_pos - dof_pos
+            rl_dof_err[wheel_ids] = 0.0
 
             # rl control
             if control_mode == 2:
@@ -235,12 +268,20 @@ def main():
                 commands = [0., 0., 0.]
             # pd control
             if control_mode == 1:
+                if pd_transition_start is not None and pd_transition_elapsed < pd_transition_time:
+                    blend = pd_transition_elapsed / pd_transition_time
+                    pd_target_dof_pos = torch.lerp(pd_transition_start, pd_hold_dof_pos, blend)
+                    pd_transition_elapsed += m.opt.timestep * cfg["sim_steps_per_loop"]
+                else:
+                    pd_target_dof_pos = pd_hold_dof_pos
+                pd_dof_err = pd_target_dof_pos - dof_pos
+                pd_dof_err[wheel_ids] = 0.0
                 act = torch.zeros(16, device=device)
                 for i in range(16):
                     if i in wheel_ids:
-                        act[i] = -d_gains[i]*dof_vel[i]
+                        act[i] = -pd_d_gains[i]*dof_vel[i]
                     else:
-                        act[i] = (1.2 * 1.25 * p_gains[i]*dof_err[i] - d_gains[i]*dof_vel[i])
+                        act[i] = pd_p_gains[i] * pd_dof_err[i] - pd_d_gains[i] * dof_vel[i]
                 apply_ctrl(act)
 
             elif control_mode == 2 and policy is not None:
@@ -254,7 +295,7 @@ def main():
                 if wheel_control == "torque":
                     pos_actions_scaled = actions_scaled.clone()
                     pos_actions_scaled[wheel_ids] = 0.0
-                    act = p_gains * (pos_actions_scaled + dof_err) - d_gains * dof_vel
+                    act = p_gains * (pos_actions_scaled + rl_dof_err) - d_gains * dof_vel
                     act[wheel_ids] = (
                         actions_scaled[wheel_ids] * p_gains[wheel_ids]
                         - d_gains[wheel_ids] * dof_vel[wheel_ids]
@@ -263,7 +304,7 @@ def main():
                     actions_scaled[wheel_ids] = 0.0
                     vel_ref = torch.zeros_like(actions_scaled)
                     vel_ref[wheel_ids] = actions[wheel_ids] * vel_scale
-                    act = p_gains * (actions_scaled + dof_err) + d_gains * (vel_ref - dof_vel)
+                    act = p_gains * (actions_scaled + rl_dof_err) + d_gains * (vel_ref - dof_vel)
                 apply_ctrl(act)
             else:
                 d.ctrl[:] = 0.0

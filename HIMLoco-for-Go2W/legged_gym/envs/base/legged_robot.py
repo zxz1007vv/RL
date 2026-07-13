@@ -523,6 +523,13 @@ class LeggedRobot(BaseTask):
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
 
+        zero_command_prob = getattr(self.cfg.commands, "zero_command_prob", 0.0)
+        if zero_command_prob > 0.0 and len(env_ids) > 0:
+            zero_command_env_ids = env_ids[
+                (torch.rand(len(env_ids), device=self.device) < zero_command_prob).nonzero(as_tuple=True)
+            ]
+            self.commands[zero_command_env_ids, :3] = 0.0
+
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -1289,6 +1296,22 @@ class LeggedRobot(BaseTask):
         dof_err = self.dof_pos - self.default_dof_pos
         dof_err[:,self.wheel_indices] = 0
         return torch.sum(torch.abs(dof_err), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
+
+    def _reward_base_stand_still(self):
+        # 零速驻车：惩罚机身平面速度和 yaw 角速度，避免无指令漂移。
+        stand_mask = (torch.norm(self.commands[:, :2], dim=1) < 0.1) & (torch.abs(self.commands[:, 2]) < 0.1)
+        base_vel_error = torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1) + torch.square(self.base_ang_vel[:, 2])
+        return base_vel_error * stand_mask
+
+    def _reward_wheel_stand_still(self):
+        # 零速驻车：惩罚零指令下轮子 action，防止 policy 给轮子持续驱动力矩。
+        stand_mask = (torch.norm(self.commands[:, :2], dim=1) < 0.1) & (torch.abs(self.commands[:, 2]) < 0.1)
+        return torch.sum(torch.square(self.actions[:, self.wheel_indices]), dim=1) * stand_mask
+
+    def _reward_wheel_vel_stand_still(self):
+        # 零速驻车：轻微惩罚零指令下轮速，抑制 sim2sim 中慢速滑移。
+        stand_mask = (torch.norm(self.commands[:, :2], dim=1) < 0.1) & (torch.abs(self.commands[:, 2]) < 0.1)
+        return torch.sum(torch.square(self.dof_vel[:, self.wheel_indices]), dim=1) * stand_mask
     
     def _reward_feet_stumble(self):
         # 步态/接触：惩罚足端/轮足撞到竖直障碍或发生明显侧向碰撞。

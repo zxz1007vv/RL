@@ -296,14 +296,19 @@ def main():
                     pos_actions_scaled = actions_scaled.clone()
                     pos_actions_scaled[wheel_ids] = 0.0
                     act = p_gains * (pos_actions_scaled + rl_dof_err) - d_gains * dof_vel
-                    act[wheel_ids] = (
-                        actions_scaled[wheel_ids] * p_gains[wheel_ids]
-                        - d_gains[wheel_ids] * dof_vel[wheel_ids]
-                    )
+                    if abs(commands[0]) < 0.05 and abs(commands[1]) < 0.05 and abs(commands[2]) < 0.05:
+                        act[wheel_ids] = -d_gains[wheel_ids] * dof_vel[wheel_ids]
+                    else:
+                        act[wheel_ids] = (
+                            actions_scaled[wheel_ids] * p_gains[wheel_ids]
+                            - d_gains[wheel_ids] * dof_vel[wheel_ids]
+                        )
                 else:
                     actions_scaled[wheel_ids] = 0.0
                     vel_ref = torch.zeros_like(actions_scaled)
                     vel_ref[wheel_ids] = actions[wheel_ids] * vel_scale
+                    if abs(commands[0]) < 0.05 and abs(commands[1]) < 0.05 and abs(commands[2]) < 0.05:
+                        vel_ref[wheel_ids] = 0.0
                     act = p_gains * (actions_scaled + rl_dof_err) + d_gains * (vel_ref - dof_vel)
                 apply_ctrl(act)
             else:

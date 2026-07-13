@@ -73,6 +73,7 @@ class LeggedRobotCfg(BaseConfig):
         num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 10. # time before command are changed[s]
         heading_command = True # if true: compute ang vel command from heading error
+        zero_command_prob = 0.0 # probability of sampling an explicit stand-still command
         class ranges:
             lin_vel_x = [-1.0, 1.0] # min max [m/s]
             lin_vel_y = [-1.0, 1.0]   # min max [m/s]
@@ -122,7 +123,7 @@ class LeggedRobotCfg(BaseConfig):
 
     class domain_rand:
         randomize_payload_mass = True
-        payload_mass_range = [-1, 2]
+        payload_mass_range = [-1, 5]
 
         randomize_com_displacement = True
         com_displacement_range = [-0.05, 0.05]

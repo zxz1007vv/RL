@@ -128,6 +128,7 @@ commands:
     lin_vel_x: [-1.0, 1.0]
     lin_vel_y: [-0.6, 0.6]
     ang_vel_yaw: [-1.0, 1.0]
+  deadband: 0.08
   # Used only when mode = "heading".
   yaw_kp: 2.5
 

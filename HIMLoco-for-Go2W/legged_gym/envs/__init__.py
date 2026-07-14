@@ -34,6 +34,8 @@ from legged_gym.envs.go2w.go2w_config import GO2WRoughCfg,GO2WRoughCfgPPO
 from .go2w.go2w_robot import Go2w
 from legged_gym.envs.zgwt.zgwt_config import ZGWTRoughCfg, ZGWTRoughCfgPPO
 from .zgwt.zgwt_robot import Zgwt
+from legged_gym.envs.zgwt.zgwt_dance_config import ZGWTDanceCfg, ZGWTDanceCfgPPO
+from .zgwt.zgwt_dance_robot import ZgwtDance
 
 import os
 
@@ -41,3 +43,6 @@ from legged_gym.utils.task_registry import task_registry
 
 task_registry.register("go2w", Go2w, GO2WRoughCfg(), GO2WRoughCfgPPO())
 task_registry.register("zgwt", Zgwt, ZGWTRoughCfg(), ZGWTRoughCfgPPO())
+task_registry.register(
+    "zgwt_dance", ZgwtDance, ZGWTDanceCfg(), ZGWTDanceCfgPPO()
+)

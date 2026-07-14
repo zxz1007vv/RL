@@ -39,7 +39,15 @@ import numpy as np
 import torch
 
 
-def play(args, x_vel=1.0, y_vel=0.0, yaw_vel=0.0):
+def play(
+    args,
+    x_vel=1.0,
+    y_vel=0.0,
+    yaw_vel=0.0,
+    body_roll=0.0,
+    body_pitch=0.0,
+    body_height=0.54,
+):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)     #环境数量上限
@@ -56,9 +64,21 @@ def play(args, x_vel=1.0, y_vel=0.0, yaw_vel=0.0):
     # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    env.commands[:, 0] = x_vel
-    env.commands[:, 1] = y_vel
-    env.commands[:, 2] = yaw_vel
+    def set_test_commands():
+        if env.cfg.commands.num_commands >= 6:
+            # The dedicated dance policy is stationary by construction.
+            env.commands[:, :3] = 0.0
+            env.commands[:, 3] = body_roll
+            env.commands[:, 4] = body_pitch
+            env.commands[:, 5] = body_height
+            if hasattr(env, "pose_command_targets"):
+                env.pose_command_targets[:] = env.commands[:, 3:6]
+        else:
+            env.commands[:, 0] = x_vel
+            env.commands[:, 1] = y_vel
+            env.commands[:, 2] = yaw_vel
+
+    set_test_commands()
 
     obs = env.get_observations()
     # load policy
@@ -86,9 +106,7 @@ def play(args, x_vel=1.0, y_vel=0.0, yaw_vel=0.0):
     for i in range(10*int(env.max_episode_length)):
     
         actions = policy(obs.detach())
-        env.commands[:, 0] = x_vel
-        env.commands[:, 1] = y_vel
-        env.commands[:, 2] = yaw_vel
+        set_test_commands()
         obs, _, rews, dones, infos, _, _ = env.step(actions.detach())
 
         if RECORD_FRAMES:
@@ -132,4 +150,4 @@ if __name__ == '__main__':
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
-    play(args, x_vel=0.0, y_vel=0.0, yaw_vel=0.0)
+    play(args, x_vel=1.5, y_vel=0.0, yaw_vel=0.0)

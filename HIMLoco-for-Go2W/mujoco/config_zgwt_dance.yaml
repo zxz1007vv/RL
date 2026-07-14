@@ -1,0 +1,34 @@
+# Reuse robot, joint, actuator, and scene definitions from the locomotion setup.
+extends: "config_zgwt.yaml"
+
+paths:
+  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy.pt"
+
+commands:
+  mode: "yaw_rate"
+  policy_order:
+    - lin_vel_x
+    - lin_vel_y
+    - ang_vel_yaw
+    - body_roll
+    - body_pitch
+    - body_height
+  scales: [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
+  ranges:
+    lin_vel_x: [0.0, 0.0]
+    lin_vel_y: [0.0, 0.0]
+    ang_vel_yaw: [0.0, 0.0]
+    body_roll: [-0.25, 0.25]
+    body_pitch: [-0.25, 0.25]
+    body_height: [0.40, 0.58]
+  pose_defaults:
+    body_roll: 0.0
+    body_pitch: 0.0
+    body_height: 0.54
+  dance_trajectory:
+    enabled: true
+    frequency: 0.25
+    roll_amplitude: 0.15
+    pitch_amplitude: 0.12
+    height_center: 0.52
+    height_amplitude: 0.06

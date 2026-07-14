@@ -227,13 +227,13 @@ class PolicyExporterHIM(torch.nn.Module):
         super().__init__()
         self.actor = copy.deepcopy(actor_critic.actor)
         self.estimator = copy.deepcopy(actor_critic.estimator.encoder)
+        self.num_one_step_obs = actor_critic.num_one_step_obs
 
     def forward(self, obs_history):
         parts = self.estimator(obs_history).squeeze(0)[0:19]   # -> [19]
         vel, z = parts[:3], parts[3:]
         z = F.normalize(z, dim=-1, p=2.0)
-        #  -> [57+3+16]=[76]
-        obs_curr = obs_history.squeeze(0)[:57]
+        obs_curr = obs_history.squeeze(0)[:self.num_one_step_obs]
         actor_in = torch.cat([obs_curr, vel, z], dim=0)   # 1-D
         return self.actor(actor_in.unsqueeze(0)).squeeze(0)  # actor 需要 2-D 输入，输出再压回 1-D
     def export(self, path):

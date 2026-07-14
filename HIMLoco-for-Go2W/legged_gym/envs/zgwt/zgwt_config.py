@@ -29,7 +29,7 @@ class ZGWTRoughCfg(LeggedRobotCfg):
         num_commands = 4        #命令维度
         resampling_time = 10.0    #命令重采样时间
         heading_command = False    #是否使用航向命令
-        zero_command_prob = 0.3    #显式静止命令采样比例，训练零速驻车能力
+        zero_command_prob = 0.20   #移动指令为主，保留少量显式静止样本抑制零速漂移
 
         class ranges:  #初始命令范围，课程设置的最大值
             lin_vel_x = [-1, 1]
@@ -210,8 +210,8 @@ class ZGWTRoughCfg(LeggedRobotCfg):
             # 步态/接触：轮足车尽量保持轮足接地，减少启停时扬腿和重心晃动。
             stand_still = -0.2
             base_stand_still = -2.0
-            wheel_stand_still = -0.5
-            wheel_vel_stand_still = -1.0e-4
+            wheel_stand_still = -0.8
+            wheel_vel_stand_still = -2.0e-4
             run_still = -0.08     #-0.02
             feet_contact = -0.25   #-0.15
             feet_stumble = -0.1

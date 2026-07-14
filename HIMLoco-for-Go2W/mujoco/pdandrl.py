@@ -15,8 +15,27 @@ args = parser.parse_args()
 config_path = os.path.abspath(args.config)
 config_dir = os.path.dirname(config_path)
 
-with open(config_path, "r") as f:
-    cfg = yaml.safe_load(f)
+def merge_config(base, override):
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_config(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_config(path):
+    with open(path, "r") as config_file:
+        loaded = yaml.safe_load(config_file) or {}
+    parent = loaded.pop("extends", None)
+    if parent is None:
+        return loaded
+    parent_path = parent if os.path.isabs(parent) else os.path.join(os.path.dirname(path), parent)
+    return merge_config(load_config(os.path.normpath(parent_path)), loaded)
+
+
+cfg = load_config(config_path)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 paths = cfg["paths"]
@@ -77,10 +96,17 @@ wheel_control = cfg.get("wheel_control", "velocity")
 commands_cfg = cfg.get("commands", {})
 command_mode = commands_cfg.get("mode", "heading")
 command_ranges = commands_cfg.get("ranges", {})
+command_deadband = float(commands_cfg.get("deadband", 0.05))
+policy_command_names = commands_cfg.get(
+    "policy_order", ["lin_vel_x", "lin_vel_y", "ang_vel_yaw"]
+)
+pose_defaults = commands_cfg.get("pose_defaults", {})
+dance_trajectory = commands_cfg.get("dance_trajectory", {})
 yaw_kp = commands_cfg.get("yaw_kp", cfg.get("yaw_kp", 2.5))
 
 scale_factors = cfg["scale_factors"]
 input_cfg = cfg.get("input", {})
+history_length = int(cfg.get("history_length", 6))
 
 if input_cfg.get("source", "keyboard") == "gamepad":
     from cmd_gamepad import CmdGenerator
@@ -119,7 +145,12 @@ def world2self(quat, v):
 
 def get_obs(actions, default_dof_pos, commands):
     sf = scale_factors
-    commands_scale = torch.tensor([sf["scale_lin_vel"], sf["scale_lin_vel"], sf["scale_ang_vel"]], device=device)
+    default_command_scales = [
+        sf["scale_lin_vel"], sf["scale_lin_vel"], sf["scale_ang_vel"]
+    ]
+    commands_scale = torch.tensor(
+        commands_cfg.get("scales", default_command_scales), device=device
+    )
     base_quat = get_sensor_data("imu_quat")
     projected_gravity = world2self(base_quat, torch.tensor([0., 0., -1.], device=device))
     imu_gyro = get_sensor_data("imu_gyro")
@@ -157,6 +188,7 @@ def prepare_commands(raw_commands):
         clamp_command(raw_commands[1], "lin_vel_y"),
         raw_commands[2],
     ]
+    yaw_now = None
     if command_mode == "heading":
         base_quat = get_sensor_data("imu_quat")
         q_w, q_x, q_y, q_z = base_quat
@@ -164,14 +196,23 @@ def prepare_commands(raw_commands):
         yaw_target = torch.tensor(commands[2], device=device, dtype=torch.float32)
         yaw_err = torch.atan2(torch.sin(yaw_target - yaw_now), torch.cos(yaw_target - yaw_now))
         commands[2] = clamp_command((yaw_kp * yaw_err).item(), "ang_vel_yaw")
-        return commands, yaw_now.item()
+    else:
+        commands[2] = clamp_command(commands[2], "ang_vel_yaw")
 
-    commands[2] = clamp_command(commands[2], "ang_vel_yaw")
-    return commands, None
+    if all(abs(command) < command_deadband for command in commands[:3]):
+        commands[:3] = [0.0, 0.0, 0.0]
+
+    # Dance policies append [body_roll, body_pitch, body_height]. Input devices
+    # may provide these explicitly; otherwise use the safe pose defaults.
+    for index, name in enumerate(policy_command_names[3:], start=3):
+        value = raw_commands[index] if len(raw_commands) > index else pose_defaults[name]
+        commands.append(clamp_command(value, name))
+
+    return commands, None if yaw_now is None else yaw_now.item()
 
 def fill_obs_buffer(actions, commands):
     obs_now = torch.clip(get_obs(actions, default_dof_pos, commands), -100, 100)
-    return obs_now.repeat(6, 1)
+    return obs_now.repeat(history_length, 1)
 
 def apply_ctrl(act):
     act = torch.max(torch.min(act, ctrl_limits[:, 1]), ctrl_limits[:, 0])
@@ -183,6 +224,7 @@ def main():
     pd_target_dof_pos = pd_hold_dof_pos.clone()
     pd_transition_start = None
     pd_transition_elapsed = pd_transition_time
+    trajectory_start_time = time.time()
 
     # load policy
     try:
@@ -205,7 +247,8 @@ def main():
     print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
-    obs_buffer = torch.zeros((6, 57), device=device)
+    one_step_obs_size = 6 + len(policy_command_names) + 3 * len(joint_names)
+    obs_buffer = torch.zeros((history_length, one_step_obs_size), device=device)
 
     # control by keyboard
     def on_press(key):
@@ -246,7 +289,9 @@ def main():
                     print("\nCannot enter RL mode: policy is not loaded")
             elif mode_request == "pd":
                 actions = torch.zeros(16, device=device)
-                obs_buffer = torch.zeros((6, 57), device=device)
+                obs_buffer = torch.zeros(
+                    (history_length, one_step_obs_size), device=device
+                )
                 # Blend from the RL exit pose to the fixed PD target instead of
                 # applying a large position error in one simulation step.
                 pd_transition_start = dof_pos.clone()
@@ -259,8 +304,24 @@ def main():
 
             # rl control
             if control_mode == 2:
-                commands, yaw_now = prepare_commands(get_cmd())
+                raw_commands = get_cmd()
+                if dance_trajectory.get("enabled", False) and len(policy_command_names) >= 6:
+                    elapsed = time.time() - trajectory_start_time
+                    frequency = float(dance_trajectory.get("frequency", 0.25))
+                    phase = 2.0 * np.pi * frequency * elapsed
+                    raw_commands = list(raw_commands[:3]) + [
+                        float(dance_trajectory.get("roll_amplitude", 0.15)) * np.sin(phase),
+                        float(dance_trajectory.get("pitch_amplitude", 0.12)) * np.sin(phase + np.pi / 2.0),
+                        float(dance_trajectory.get("height_center", 0.52))
+                        + float(dance_trajectory.get("height_amplitude", 0.06)) * np.sin(phase * 0.5),
+                    ]
+                commands, yaw_now = prepare_commands(raw_commands)
                 status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}"
+                if len(commands) >= 6:
+                    status += (
+                        f"  roll={commands[3]:+4.2f} pitch={commands[4]:+4.2f}"
+                        f" height={commands[5]:4.2f}"
+                    )
                 if yaw_now is not None:
                     status += f"  yaw_now={yaw_now:+4.2f}"
                 print(status, end='')
@@ -296,7 +357,7 @@ def main():
                     pos_actions_scaled = actions_scaled.clone()
                     pos_actions_scaled[wheel_ids] = 0.0
                     act = p_gains * (pos_actions_scaled + rl_dof_err) - d_gains * dof_vel
-                    if abs(commands[0]) < 0.05 and abs(commands[1]) < 0.05 and abs(commands[2]) < 0.05:
+                    if abs(commands[0]) < command_deadband and abs(commands[1]) < command_deadband and abs(commands[2]) < command_deadband:
                         act[wheel_ids] = -d_gains[wheel_ids] * dof_vel[wheel_ids]
                     else:
                         act[wheel_ids] = (
@@ -307,7 +368,7 @@ def main():
                     actions_scaled[wheel_ids] = 0.0
                     vel_ref = torch.zeros_like(actions_scaled)
                     vel_ref[wheel_ids] = actions[wheel_ids] * vel_scale
-                    if abs(commands[0]) < 0.05 and abs(commands[1]) < 0.05 and abs(commands[2]) < 0.05:
+                    if abs(commands[0]) < command_deadband and abs(commands[1]) < command_deadband and abs(commands[2]) < command_deadband:
                         vel_ref[wheel_ids] = 0.0
                     act = p_gains * (actions_scaled + rl_dof_err) + d_gains * (vel_ref - dof_vel)
                 apply_ctrl(act)

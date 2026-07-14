@@ -8,6 +8,7 @@
 | --- | --- | ---: | --- | --- |
 | `go2w` | Go2W 轮足机器人 | 16 | URDF、MJCF | `logs/GO2W/` |
 | `zgwt` | ZGWT 轮足机器人 | 16 | URDF | `logs/ZGWT/` |
+| `zgwt_dance` | ZGWT 固定位置姿态/舞蹈任务 | 16 | URDF、MJCF | `logs/ZGWT_DANCE/` |
 
 ## 一、框架主要组成及关系
 
@@ -153,6 +154,9 @@ python legged_gym/scripts/train.py --task=go2w
 # ZGWT
 python legged_gym/scripts/train.py --task=zgwt
 
+# ZGWT 鸡头/舞蹈姿态跟踪（roll、pitch、body height）
+python legged_gym/scripts/train.py --task=zgwt_dance
+
 # 新机器人初次验证时减少并行环境
 python legged_gym/scripts/train.py --task=zgwt --num_envs=16
 ```
@@ -198,6 +202,9 @@ tensorboard --logdir logs/GO2W --port 6006
 
 ```bash
 python legged_gym/scripts/play.py --task=zgwt --num_envs=1
+
+# 舞蹈策略（play.py 中可设置 body_roll/body_pitch/body_height）
+python legged_gym/scripts/play.py --task=zgwt_dance --num_envs=1
 ```
 
 加载指定 checkpoint：
@@ -227,6 +234,9 @@ logs/<实验名称>/exported/policies/
 ```bash
 cd mujoco
 python pdandrl.py
+
+# ZGWT 舞蹈策略：使用零移动速度和默认平滑正弦姿态轨迹
+python pdandrl.py --config config_zgwt_dance.yaml
 ```
 
 | 按键 | 功能 |

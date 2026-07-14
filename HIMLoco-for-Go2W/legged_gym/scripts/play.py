@@ -53,7 +53,7 @@ def play(
     roll_amplitude=0.15,
     pitch_amplitude=0.12,
     height_center=0.52,
-    height_amplitude=0.06,
+    height_amplitude=0.04,
 ):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -208,9 +208,9 @@ if __name__ == '__main__':
         roll_amplitude=0.15,
         pitch_amplitude=0.12,
         height_center=0.52,
-        height_amplitude=0.06,
+        height_amplitude=0.04,
 
         body_roll=0.15,
         body_pitch=-0.12,
-        body_height=0.30,
+        body_height=0.50,
     )

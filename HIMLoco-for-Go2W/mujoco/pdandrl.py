@@ -63,6 +63,52 @@ def get_dof_values(key, legacy_key):
 default_dof_pos = torch.tensor(get_dof_values("default", "default_dof_pos"), dtype=torch.float32, device=device)
 crouch_dof_pos  = torch.tensor(get_dof_values("crouch", "crouch_dof_pos"), dtype=torch.float32, device=device)
 
+startup_cfg = cfg.get("startup_sequence", {})
+startup_enabled = bool(startup_cfg.get("enabled", False))
+startup_leg_order = startup_cfg.get("leg_order", ["FAR", "FBL", "RAR", "RBL"])
+
+def build_startup_pose(abad_values, hip_values, knee_values):
+    if not (
+        len(abad_values) == len(hip_values) == len(knee_values) == len(startup_leg_order)
+    ):
+        raise ValueError("Startup pose arrays must match startup_sequence.leg_order")
+    pose = default_dof_pos.clone()
+    leg_to_index = {name: index for index, name in enumerate(startup_leg_order)}
+    for dof_index, joint_name in enumerate(joint_names):
+        leg_name = joint_name.split("_", 1)[0]
+        if leg_name not in leg_to_index:
+            continue
+        leg_index = leg_to_index[leg_name]
+        if "ABAD" in joint_name:
+            pose[dof_index] = abad_values[leg_index]
+        elif "HIP" in joint_name:
+            pose[dof_index] = hip_values[leg_index]
+        elif "KNEE" in joint_name:
+            pose[dof_index] = knee_values[leg_index]
+        elif dof_index in wheel_ids:
+            pose[dof_index] = 0.0
+    return pose
+
+
+if startup_enabled:
+    fold_dof_pos = build_startup_pose(
+        startup_cfg["fold_abad_pos"],
+        startup_cfg["fold_hip_pos"],
+        startup_cfg["fold_knee_pos"],
+    )
+    stand_dof_pos = build_startup_pose(
+        startup_cfg["stand_abad_pos"],
+        startup_cfg["stand_hip_pos"],
+        startup_cfg["stand_knee_pos"],
+    )
+    fold_duration = max(float(startup_cfg.get("fold_duration", 2.0)), 1.0e-6)
+    stand_duration = max(float(startup_cfg.get("stand_duration", 2.0)), 1.0e-6)
+else:
+    fold_dof_pos = None
+    stand_dof_pos = None
+    fold_duration = 0.0
+    stand_duration = 0.0
+
 if "pd_hold_dof_pos" in cfg:
     pd_hold_dof_pos = torch.tensor(
         expand_dof_values(cfg["pd_hold_dof_pos"]), dtype=torch.float32, device=device
@@ -228,10 +274,14 @@ def apply_ctrl(act):
 
 def main():
     global control_mode
-    control_mode = 2 if cfg.get("start_in_rl", False) else 1
+    if startup_enabled:
+        control_mode = 0  # zero torque
+    else:
+        control_mode = 2 if cfg.get("start_in_rl", False) else 1
+    pd_phase = "zero" if startup_enabled else "hold"
     pd_target_dof_pos = pd_hold_dof_pos.clone()
     pd_transition_start = None
-    pd_transition_elapsed = pd_transition_time
+    pd_transition_elapsed = 0.0 if startup_enabled else pd_transition_time
     trajectory_start_time = time.time()
 
     # load policy
@@ -243,16 +293,22 @@ def main():
         policy = None
         print("Fail to load policy network", e)
 
-    for i, name in enumerate(joint_names):
-        jnt_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
-        d.qpos[m.jnt_qposadr[jnt_id]] = pd_hold_dof_pos[i].item()
+    if not startup_enabled:
+        for i, name in enumerate(joint_names):
+            jnt_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
+            d.qpos[m.jnt_qposadr[jnt_id]] = pd_hold_dof_pos[i].item()
     if base_pos is not None:
         d.qpos[:3] = np.asarray(base_pos, dtype=np.float64)
     d.qvel[:] = 0.0
     mujoco.mj_forward(m, d)
-    print("PD hold mode ......")
-    print("Gamepad: A -> RL   B -> PD hold")
-    print("Keyboard fallback: 1 -> PD hold   2 -> RL")
+    if startup_enabled:
+        print("Zero-torque mode ......")
+        print("Gamepad: A -> fold then stand   B -> RL (after standing)")
+        print("Keyboard fallback: A -> fold then stand   B -> RL")
+    else:
+        print("PD hold mode ......")
+        print("Gamepad: A -> RL   B -> PD hold")
+        print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
     one_step_obs_size = 6 + len(policy_command_names) + 3 * len(joint_names)
@@ -262,19 +318,29 @@ def main():
         print("RL mode ......")
 
     # control by keyboard
+    keyboard_mode_request = None
+
     def on_press(key):
-        nonlocal actions, obs_buffer, pd_target_dof_pos, pd_transition_start, pd_transition_elapsed
+        nonlocal actions, obs_buffer, pd_target_dof_pos, pd_transition_start
+        nonlocal pd_transition_elapsed, keyboard_mode_request
         global control_mode
         try:
-            if key.char == '1':
+            pressed = key.char.lower()
+            if startup_enabled and pressed == 'a':
+                keyboard_mode_request = "stand"
+            elif startup_enabled and pressed == 'b':
+                keyboard_mode_request = "rl"
+            elif pressed == '1':
                 pd_transition_start = None
                 pd_transition_elapsed = pd_transition_time
                 pd_target_dof_pos = pd_hold_dof_pos.clone()
                 control_mode = 1
                 print(" PD hold mode ......")
-            elif key.char == '2' and policy is not None:
+            elif pressed == '2' and policy is not None:
                 actions = torch.zeros(16, device=device)
-                obs_buffer = fill_obs_buffer(actions, [0., 0., 0.])
+                obs_buffer = fill_obs_buffer(
+                    actions, prepare_commands(get_cmd())[0]
+                )
                 control_mode = 2
                 print(" RL mode ......")
         except AttributeError:
@@ -299,15 +365,40 @@ def main():
             dof_vel = torch.cat([get_sensor_data(n+"_vel") for n in joint_names]).to(device)
 
             mode_request = pop_mode_request()
-            if mode_request == "rl":
+            if mode_request is None and keyboard_mode_request is not None:
+                mode_request = keyboard_mode_request
+                keyboard_mode_request = None
+
+            if startup_enabled and mode_request == "stand":
+                actions = torch.zeros(16, device=device)
+                pd_transition_start = dof_pos.clone()
+                pd_transition_elapsed = 0.0
+                pd_phase = "fold"
+                control_mode = 1
+                print("\nPD sequence: moving to folded pose ......")
+            elif startup_enabled and mode_request == "rl":
+                if pd_phase != "hold":
+                    print("\nRL blocked: press A and wait until standing is complete")
+                elif policy is not None:
+                    actions = torch.zeros(16, device=device)
+                    obs_buffer = fill_obs_buffer(
+                        actions, prepare_commands(get_cmd())[0]
+                    )
+                    control_mode = 2
+                    print("\nRL mode ......")
+                else:
+                    print("\nCannot enter RL mode: policy is not loaded")
+            elif not startup_enabled and mode_request == "rl":
                 if policy is not None:
                     actions = torch.zeros(16, device=device)
-                    obs_buffer = fill_obs_buffer(actions, [0., 0., 0.])
+                    obs_buffer = fill_obs_buffer(
+                        actions, prepare_commands(get_cmd())[0]
+                    )
                     control_mode = 2
                     print("\n RL mode ......")
                 else:
                     print("\nCannot enter RL mode: policy is not loaded")
-            elif mode_request == "pd":
+            elif not startup_enabled and mode_request == "pd":
                 actions = torch.zeros(16, device=device)
                 obs_buffer = torch.zeros(
                     (history_length, one_step_obs_size), device=device
@@ -349,10 +440,32 @@ def main():
                 commands = [0., 0., 0.]
             # pd control
             if control_mode == 1:
-                if pd_transition_start is not None and pd_transition_elapsed < pd_transition_time:
+                control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
+                if startup_enabled and pd_phase in ("fold", "stand"):
+                    target_pose = fold_dof_pos if pd_phase == "fold" else stand_dof_pos
+                    duration = fold_duration if pd_phase == "fold" else stand_duration
+                    blend = min(pd_transition_elapsed / duration, 1.0)
+                    blend = blend * blend * (3.0 - 2.0 * blend)
+                    pd_target_dof_pos = torch.lerp(
+                        pd_transition_start, target_pose, blend
+                    )
+                    pd_transition_elapsed += control_dt
+                    if pd_transition_elapsed >= duration:
+                        if pd_phase == "fold":
+                            pd_phase = "stand"
+                            pd_transition_start = dof_pos.clone()
+                            pd_transition_elapsed = 0.0
+                            print("\nPD sequence: moving to standing pose ......")
+                        else:
+                            pd_phase = "hold"
+                            pd_target_dof_pos = stand_dof_pos.clone()
+                            print("\nPD standing hold ready; press B to enter RL")
+                elif startup_enabled and pd_phase == "hold":
+                    pd_target_dof_pos = stand_dof_pos
+                elif pd_transition_start is not None and pd_transition_elapsed < pd_transition_time:
                     blend = pd_transition_elapsed / pd_transition_time
                     pd_target_dof_pos = torch.lerp(pd_transition_start, pd_hold_dof_pos, blend)
-                    pd_transition_elapsed += m.opt.timestep * cfg["sim_steps_per_loop"]
+                    pd_transition_elapsed += control_dt
                 else:
                     pd_target_dof_pos = pd_hold_dof_pos
                 pd_dof_err = pd_target_dof_pos - dof_pos

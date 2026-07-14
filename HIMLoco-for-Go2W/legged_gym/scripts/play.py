@@ -134,6 +134,28 @@ def play(
         actions = policy(obs.detach())
         obs, _, rews, dones, infos, _, _ = env.step(actions.detach())
 
+        if env.cfg.commands.num_commands >= 6 and i % 50 == 0:
+            actual_roll, actual_pitch = env._current_roll_pitch()
+            actual_height = env._current_base_height()
+
+            cmd_roll = env.commands[robot_index, 3].item()
+            cmd_pitch = env.commands[robot_index, 4].item()
+            cmd_height = env.commands[robot_index, 5].item()
+
+            roll_now = actual_roll[robot_index].item()
+            pitch_now = actual_pitch[robot_index].item()
+            height_now = actual_height[robot_index].item()
+
+            print(
+                "\n"
+                f"roll:   cmd={cmd_roll:+.3f}, actual={roll_now:+.3f}, "
+                f"error={cmd_roll-roll_now:+.3f}\n"
+                f"pitch:  cmd={cmd_pitch:+.3f}, actual={pitch_now:+.3f}, "
+                f"error={cmd_pitch-pitch_now:+.3f}\n"
+                f"height: cmd={cmd_height:+.3f}, actual={height_now:+.3f}, "
+                f"error={cmd_height-height_now:+.3f}"
+            )
+
         if RECORD_FRAMES:
             if i % 2:
                 filename = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'frames', f"{img_idx}.png")
@@ -180,11 +202,15 @@ if __name__ == '__main__':
         x_vel=1.5,
         y_vel=0.0,
         yaw_vel=0.0,
-        dance_trajectory=True,
+        dance_trajectory=False,
         dance_ramp_time=2.0,
         dance_frequency=0.25,
         roll_amplitude=0.15,
         pitch_amplitude=0.12,
         height_center=0.52,
         height_amplitude=0.06,
+
+        body_roll=0.15,
+        body_pitch=-0.12,
+        body_height=0.30,
     )

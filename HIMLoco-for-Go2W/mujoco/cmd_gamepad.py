@@ -3,7 +3,7 @@ import time
 
 
 class CmdGenerator:
-    """Generate [vx, vy, yaw_target] commands from a gamepad.
+    """Generate locomotion or dance commands from a gamepad.
 
     Logitech F710 recommended setup:
     - put the side switch in X mode (XInput)
@@ -20,6 +20,12 @@ class CmdGenerator:
     - configured reset button: reset all commands
     - configured start button: request RL mode
     - configured stop button: request PD-hold mode
+
+    Dance command mapping:
+    - left stick left/right: body roll
+    - left stick up/down: body pitch
+    - right stick up/down: body height
+    - output: [0, 0, 0, body_roll, body_pitch, body_height]
     """
 
     def __init__(self, cfg=None):
@@ -34,6 +40,7 @@ class CmdGenerator:
         self.pygame = pygame
         self.device_index = int(cfg.get("device_index", 0))
         self.deadzone = float(cfg.get("deadzone", 0.08))
+        self.command_profile = cfg.get("command_profile", "locomotion")
         self.max_vx = float(cfg.get("max_vx", 1.0))
         self.max_vy = float(cfg.get("max_vy", 0.5))
         self.max_yaw_rate = float(cfg.get("max_yaw_rate", 1.0))
@@ -42,14 +49,29 @@ class CmdGenerator:
         self.axis_left_x = int(cfg.get("axis_left_x", 0))
         self.axis_left_y = int(cfg.get("axis_left_y", 1))
         self.axis_right_x = int(cfg.get("axis_right_x", 3))
+        self.axis_right_y = int(cfg.get("axis_right_y", 4))
+        self.max_roll = float(cfg.get("max_roll", 0.25))
+        self.max_pitch = float(cfg.get("max_pitch", 0.25))
+        self.height_center = float(cfg.get("height_center", 0.54))
+        self.height_range = float(cfg.get("height_range", 0.08))
+        self.min_height = float(cfg.get("min_height", 0.40))
+        self.max_height = float(cfg.get("max_height", 0.58))
+        self.roll_sign = float(cfg.get("roll_sign", -1.0))
+        self.pitch_sign = float(cfg.get("pitch_sign", -1.0))
+        self.height_sign = float(cfg.get("height_sign", -1.0))
         self.reset_button = int(cfg.get("reset_button", 0))
         self.start_button = int(cfg.get("start_button", 0))
         self.stop_button = int(cfg.get("stop_button", 1))
+        self.start_request = cfg.get("start_request", "rl")
+        self.stop_request = cfg.get("stop_request", "pd")
         self.update_dt = float(cfg.get("update_dt", 0.02))
 
         self.vx = 0.0
         self.vy = 0.0
         self.yaw_target = 0.0
+        self.body_roll = 0.0
+        self.body_pitch = 0.0
+        self.body_height = self.height_center
         self.mode_request = None
         self._last_start_pressed = False
         self._last_stop_pressed = False
@@ -145,6 +167,7 @@ class CmdGenerator:
                 left_x = self._get_controller_axis(0)
                 left_y = self._get_controller_axis(1)
                 right_x = self._get_controller_axis(2)
+                right_y = self._get_controller_axis(3)
                 reset_pressed = self._get_controller_button(self.reset_button)
                 start_pressed = self._get_controller_button(self.start_button)
                 stop_pressed = self._get_controller_button(self.stop_button)
@@ -153,6 +176,7 @@ class CmdGenerator:
                 left_x = self._get_joystick_axis(self.axis_left_x)
                 left_y = self._get_joystick_axis(self.axis_left_y)
                 right_x = self._get_joystick_axis(self.axis_right_x)
+                right_y = self._get_joystick_axis(self.axis_right_y)
                 reset_pressed = (
                     self.reset_button < self.joystick.get_numbuttons()
                     and self.joystick.get_button(self.reset_button)
@@ -167,25 +191,48 @@ class CmdGenerator:
                 )
 
             with self._lock:
-                self.vx = -left_y * self.max_vx
-                self.vy = -left_x * self.max_vy
-                if self.yaw_mode == "yaw_rate":
-                    self.yaw_target = -right_x * self.max_yaw_rate
+                if self.command_profile == "dance":
+                    self.vx = 0.0
+                    self.vy = 0.0
+                    self.yaw_target = 0.0
+                    self.body_roll = self.roll_sign * left_x * self.max_roll
+                    self.body_pitch = self.pitch_sign * left_y * self.max_pitch
+                    height = (
+                        self.height_center
+                        + self.height_sign * right_y * self.height_range
+                    )
+                    self.body_height = max(
+                        self.min_height, min(self.max_height, height)
+                    )
                 else:
-                    self.yaw_target += -right_x * self.max_yaw_rate * self.update_dt
+                    self.vx = -left_y * self.max_vx
+                    self.vy = -left_x * self.max_vy
+                    if self.yaw_mode == "yaw_rate":
+                        self.yaw_target = -right_x * self.max_yaw_rate
+                    else:
+                        self.yaw_target += (
+                            -right_x * self.max_yaw_rate * self.update_dt
+                        )
 
                 if reset_pressed:
                     self.vx = 0.0
                     self.vy = 0.0
                     self.yaw_target = 0.0
+                    self.body_roll = 0.0
+                    self.body_pitch = 0.0
+                    self.body_height = self.height_center
 
                 if start_pressed and not self._last_start_pressed:
-                    self.mode_request = "rl"
+                    self.mode_request = self.start_request
                 if stop_pressed and not self._last_stop_pressed:
-                    self.mode_request = "pd"
-                    self.vx = 0.0
-                    self.vy = 0.0
-                    self.yaw_target = 0.0
+                    self.mode_request = self.stop_request
+                    if self.stop_request in ("pd", "zero"):
+                        self.vx = 0.0
+                        self.vy = 0.0
+                        self.yaw_target = 0.0
+                        self.body_roll = 0.0
+                        self.body_pitch = 0.0
+                        self.body_height = self.height_center
                 self._last_start_pressed = start_pressed
                 self._last_stop_pressed = stop_pressed
 
@@ -193,6 +240,15 @@ class CmdGenerator:
 
     def get_cmd(self):
         with self._lock:
+            if self.command_profile == "dance":
+                return [
+                    0.0,
+                    0.0,
+                    0.0,
+                    self.body_roll,
+                    self.body_pitch,
+                    self.body_height,
+                ]
             return [self.vx, self.vy, self.yaw_target]
 
     def pop_mode_request(self):

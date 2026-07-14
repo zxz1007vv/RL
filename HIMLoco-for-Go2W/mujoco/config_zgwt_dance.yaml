@@ -4,10 +4,36 @@ extends: "config_zgwt.yaml"
 paths:
   policy_path: "../logs/ZGWT_DANCE/exported/policies/policy14.v1.pt"
 
-# The dance trajectory is generated below, so no keyboard/gamepad is needed.
-start_in_rl: true
+# Startup: zero torque -> A folds the legs then stands -> B enters RL.
+start_in_rl: false
+startup_sequence:
+  enabled: true
+  leg_order: ["FAR", "FBL", "RAR", "RBL"]
+  fold_duration: 2.0
+  stand_duration: 2.0
+  fold_abad_pos: [0.0, 0.0, 0.0, 0.0]
+  fold_hip_pos: [1.4, 1.4, -1.4, -1.4]
+  fold_knee_pos: [-2.4, -2.4, 2.4, 2.4]
+  stand_abad_pos: [0.0, 0.0, 0.0, 0.0]
+  stand_hip_pos: [0.6, 0.6, -0.6, -0.6]
+  stand_knee_pos: [-1.2, -1.2, 1.2, 1.2]
+
 input:
-  source: "none"
+  source: "gamepad"
+  gamepad:
+    command_profile: "dance"
+    start_request: "stand"
+    stop_request: "rl"
+    max_roll: 0.25
+    max_pitch: 0.25
+    height_center: 0.54
+    height_range: 0.08
+    min_height: 0.40
+    max_height: 0.58
+    roll_sign: -1.0
+    pitch_sign: -1.0
+    height_sign: -1.0
+    axis_right_y: 4
 
 commands:
   mode: "yaw_rate"
@@ -31,7 +57,8 @@ commands:
     body_pitch: 0.0
     body_height: 0.54
   dance_trajectory:
-    enabled: true
+    # Set true to ignore pose sticks and run the automatic sine trajectory.
+    enabled: false
     frequency: 0.25
     roll_amplitude: 0.15
     pitch_amplitude: 0.12

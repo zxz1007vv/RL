@@ -47,6 +47,13 @@ def play(
     body_roll=0.0,
     body_pitch=0.0,
     body_height=0.54,
+    dance_trajectory=True,
+    dance_ramp_time=2.0,
+    dance_frequency=0.25,
+    roll_amplitude=0.15,
+    pitch_amplitude=0.12,
+    height_center=0.52,
+    height_amplitude=0.06,
 ):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -64,13 +71,27 @@ def play(
     # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    def set_test_commands():
+    def set_test_commands(time_s=0.0):
         if env.cfg.commands.num_commands >= 6:
             # The dedicated dance policy is stationary by construction.
             env.commands[:, :3] = 0.0
-            env.commands[:, 3] = body_roll
-            env.commands[:, 4] = body_pitch
-            env.commands[:, 5] = body_height
+            if dance_trajectory:
+                phase = 2.0 * np.pi * dance_frequency * time_s
+                ramp = min(time_s / max(dance_ramp_time, env.dt), 1.0)
+                env.commands[:, 3] = ramp * roll_amplitude * np.sin(phase)
+                env.commands[:, 4] = ramp * pitch_amplitude * np.sin(
+                    phase + np.pi / 2.0
+                )
+                dance_height = height_center + height_amplitude * np.sin(
+                    phase * 0.5
+                )
+                env.commands[:, 5] = body_height + ramp * (
+                    dance_height - body_height
+                )
+            else:
+                env.commands[:, 3] = body_roll
+                env.commands[:, 4] = body_pitch
+                env.commands[:, 5] = body_height
             if hasattr(env, "pose_command_targets"):
                 env.pose_command_targets[:] = env.commands[:, 3:6]
         else:
@@ -78,13 +99,18 @@ def play(
             env.commands[:, 1] = y_vel
             env.commands[:, 2] = yaw_vel
 
-    set_test_commands()
+    set_test_commands(0.0)
 
     obs = env.get_observations()
     # load policy
     train_cfg.runner.resume = True
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
     policy = ppo_runner.get_inference_policy(device=env.device)
+    # The runner resets the environment while it is created, so restore the
+    # requested test command and refresh the first policy observation.
+    set_test_commands(0.0)
+    env.compute_observations()
+    obs = env.get_observations()
 
 
     # export policy as a jit module (used to run it from C++)
@@ -104,9 +130,8 @@ def play(
     img_idx = 0
 
     for i in range(10*int(env.max_episode_length)):
-    
+        set_test_commands(i * env.dt)
         actions = policy(obs.detach())
-        set_test_commands()
         obs, _, rews, dones, infos, _, _ = env.step(actions.detach())
 
         if RECORD_FRAMES:
@@ -150,4 +175,16 @@ if __name__ == '__main__':
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
-    play(args, x_vel=1.5, y_vel=0.0, yaw_vel=0.0)
+    play(
+        args,
+        x_vel=1.5,
+        y_vel=0.0,
+        yaw_vel=0.0,
+        dance_trajectory=True,
+        dance_ramp_time=2.0,
+        dance_frequency=0.25,
+        roll_amplitude=0.15,
+        pitch_amplitude=0.12,
+        height_center=0.52,
+        height_amplitude=0.06,
+    )

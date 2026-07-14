@@ -4,3 +4,9 @@ WARNING: mju_openResource: unknown file '/home/track/桌面/HIMLoco_Go2W/resourc
 Thu Jun 25 09:40:39 2026
 WARNING: Nan, Inf or huge value in QACC at DOF 3. The simulation is unstable. Time = 346.1150.
 
+Tue Jul 14 16:52:40 2026
+ERROR: could not initialize GLFW
+
+Tue Jul 14 16:53:20 2026
+ERROR: could not initialize GLFW
+

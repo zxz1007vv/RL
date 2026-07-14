@@ -2,7 +2,12 @@
 extends: "config_zgwt.yaml"
 
 paths:
-  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy.pt"
+  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy14.v1.pt"
+
+# The dance trajectory is generated below, so no keyboard/gamepad is needed.
+start_in_rl: true
+input:
+  source: "none"
 
 commands:
   mode: "yaw_rate"

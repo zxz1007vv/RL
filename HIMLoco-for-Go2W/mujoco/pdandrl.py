@@ -4,7 +4,6 @@ import mujoco
 import mujoco.viewer
 import time
 import numpy as np
-from pynput import keyboard
 import argparse
 import os
 
@@ -106,19 +105,28 @@ yaw_kp = commands_cfg.get("yaw_kp", cfg.get("yaw_kp", 2.5))
 
 scale_factors = cfg["scale_factors"]
 input_cfg = cfg.get("input", {})
+input_source = input_cfg.get("source", "keyboard")
 history_length = int(cfg.get("history_length", 6))
 
-if input_cfg.get("source", "keyboard") == "gamepad":
+if input_source == "gamepad":
     from cmd_gamepad import CmdGenerator
 
     cmd_generator = CmdGenerator(input_cfg.get("gamepad", {}))
     get_cmd = cmd_generator.get_cmd
     pop_mode_request = cmd_generator.pop_mode_request
-else:
+elif input_source == "keyboard":
     from cmd_keyboard import get_cmd
 
     def pop_mode_request():
         return None
+elif input_source == "none":
+    def get_cmd():
+        return [0.0, 0.0, 0.0]
+
+    def pop_mode_request():
+        return None
+else:
+    raise ValueError(f"Unsupported input source: {input_source}")
 
 # load scene
 m = mujoco.MjModel.from_xml_path(paths["scene_xml"])
@@ -220,7 +228,7 @@ def apply_ctrl(act):
 
 def main():
     global control_mode
-    control_mode = 1 # 1 -> PD hold  2 -> RL
+    control_mode = 2 if cfg.get("start_in_rl", False) else 1
     pd_target_dof_pos = pd_hold_dof_pos.clone()
     pd_transition_start = None
     pd_transition_elapsed = pd_transition_time
@@ -249,6 +257,9 @@ def main():
     actions = torch.zeros(16, device=device)
     one_step_obs_size = 6 + len(policy_command_names) + 3 * len(joint_names)
     obs_buffer = torch.zeros((history_length, one_step_obs_size), device=device)
+    if control_mode == 2 and policy is not None:
+        obs_buffer = fill_obs_buffer(actions, prepare_commands(get_cmd())[0])
+        print("RL mode ......")
 
     # control by keyboard
     def on_press(key):
@@ -269,8 +280,17 @@ def main():
         except AttributeError:
             pass
 
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
+    # Gamepad control does not require pynput. Import it only for the optional
+    # numeric-key fallback so a missing X11 display does not prevent startup.
+    listener = None
+    if input_source != "none":
+        try:
+            from pynput import keyboard as pynput_keyboard
+
+            listener = pynput_keyboard.Listener(on_press=on_press)
+            listener.start()
+        except ImportError as exc:
+            print(f"Keyboard fallback disabled: {exc}")
 
     # running
     with mujoco.viewer.launch_passive(m, d) as viewer:

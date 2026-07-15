@@ -38,18 +38,20 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             ang_vel_yaw = [0.0, 0.0]
-            body_roll = [-0.18, 0.18]
-            body_pitch = [-0.18, 0.18]
-            body_height = [0.46, 0.56]
+            body_roll = [-0.25, 0.25]
+            body_pitch = [-0.25, 0.25]
+            body_height = [0.44, 0.57]
 
         class initial_ranges:
-            body_roll = [-0.06, 0.06]
-            body_pitch = [-0.06, 0.06]
-            body_height = [0.50, 0.55]
+            body_roll = [-0.08, 0.08]
+            body_pitch = [-0.08, 0.08]
+            body_height = [0.49, 0.55]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
         randomize_payload_mass = True
+        payload_mass_range = [0.0, 10.0]
         randomize_com_displacement = True
+        com_displacement_range = [-0.08, 0.08]
         randomize_friction = True
         randomize_motor_strength = True
         randomize_kp = True
@@ -62,14 +64,14 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
             # Command tracking.
-            tracking_body_orientation = 4.0   #roll pitch
+            tracking_body_orientation = 6.0   #roll pitch  4.0
             tracking_body_height = 3.0
             tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
             tracking_lin_vy = 1.5
             tracking_ang_vel = 1.0
 
             # Keep the robot at its spawn point and keep the wheels parked.
-            base_position_drift = -3.0
+            base_position_drift = -1.0
             base_stand_still = -1.0
             wheel_stand_still = -0.5
             wheel_vel_stand_still = -2.0e-4
@@ -89,7 +91,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             torque_limits = -0.1
 
         only_positive_rewards = False
-        orientation_tracking_sigma = 0.08
+        orientation_tracking_sigma = 0.06
         height_tracking_sigma = 0.01
         default_body_height = 0.54
         termination_tilt = 0.65
@@ -111,7 +113,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "pose_tracking_v2_stable"
+        run_name = "pose_tracking_v3_large_motion"
         resume = False
         load_run = -1
         checkpoint = -1

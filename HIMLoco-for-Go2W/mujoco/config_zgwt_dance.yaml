@@ -2,7 +2,7 @@
 extends: "config_zgwt.yaml"
 
 paths:
-  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy14.v1.pt"
+  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy14.v2.pt"
 
 # Startup: zero torque -> A folds the legs then stands -> B enters RL.
 start_in_rl: false

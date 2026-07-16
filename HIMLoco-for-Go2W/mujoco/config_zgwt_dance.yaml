@@ -6,6 +6,7 @@ paths:
 
 # Startup: zero torque -> A folds the legs then stands -> B enters RL.
 start_in_rl: false
+wheel_park_damping: 1.5
 startup_sequence:
   enabled: true
   leg_order: ["FAR", "FBL", "RAR", "RBL"]
@@ -37,6 +38,7 @@ input:
 
 commands:
   mode: "yaw_rate"
+  transition_time: 0.6
   policy_order:
     - lin_vel_x
     - lin_vel_y

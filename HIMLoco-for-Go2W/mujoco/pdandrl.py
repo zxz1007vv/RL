@@ -138,7 +138,13 @@ pd_d_gains = torch.tensor(
 actions_scale = cfg["actions_scale"]
 vel_scale = cfg["vel_scale"]
 wheel_control = cfg.get("wheel_control", "velocity")
+wheel_park_damping = float(
+    cfg.get("wheel_park_damping", d_gains[wheel_ids].mean().item())
+)
 commands_cfg = cfg.get("commands", {})
+pose_transition_time = max(
+    0.0, float(commands_cfg.get("transition_time", 0.0))
+)
 command_mode = commands_cfg.get("mode", "heading")
 command_ranges = commands_cfg.get("ranges", {})
 command_deadband = float(commands_cfg.get("deadband", 0.05))
@@ -311,10 +317,26 @@ def main():
         print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
+    pose_command_state = torch.tensor(
+        [
+            float(pose_defaults.get("body_roll", 0.0)),
+            float(pose_defaults.get("body_pitch", 0.0)),
+            float(pose_defaults.get("body_height", 0.54)),
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    def initial_policy_commands():
+        commands, _ = prepare_commands(get_cmd())
+        if len(commands) >= 6:
+            commands[3:6] = pose_command_state.tolist()
+        return commands
+
     one_step_obs_size = 6 + len(policy_command_names) + 3 * len(joint_names)
     obs_buffer = torch.zeros((history_length, one_step_obs_size), device=device)
     if control_mode == 2 and policy is not None:
-        obs_buffer = fill_obs_buffer(actions, prepare_commands(get_cmd())[0])
+        obs_buffer = fill_obs_buffer(actions, initial_policy_commands())
         print("RL mode ......")
 
     # control by keyboard
@@ -338,9 +360,11 @@ def main():
                 print(" PD hold mode ......")
             elif pressed == '2' and policy is not None:
                 actions = torch.zeros(16, device=device)
-                obs_buffer = fill_obs_buffer(
-                    actions, prepare_commands(get_cmd())[0]
+                pose_command_state[:] = torch.tensor(
+                    [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
+                    device=device,
                 )
+                obs_buffer = fill_obs_buffer(actions, initial_policy_commands())
                 control_mode = 2
                 print(" RL mode ......")
         except AttributeError:
@@ -381,9 +405,11 @@ def main():
                     print("\nRL blocked: press A and wait until standing is complete")
                 elif policy is not None:
                     actions = torch.zeros(16, device=device)
-                    obs_buffer = fill_obs_buffer(
-                        actions, prepare_commands(get_cmd())[0]
+                    pose_command_state[:] = torch.tensor(
+                        [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
+                        device=device,
                     )
+                    obs_buffer = fill_obs_buffer(actions, initial_policy_commands())
                     control_mode = 2
                     print("\nRL mode ......")
                 else:
@@ -391,9 +417,11 @@ def main():
             elif not startup_enabled and mode_request == "rl":
                 if policy is not None:
                     actions = torch.zeros(16, device=device)
-                    obs_buffer = fill_obs_buffer(
-                        actions, prepare_commands(get_cmd())[0]
+                    pose_command_state[:] = torch.tensor(
+                        [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
+                        device=device,
                     )
+                    obs_buffer = fill_obs_buffer(actions, initial_policy_commands())
                     control_mode = 2
                     print("\n RL mode ......")
                 else:
@@ -427,6 +455,16 @@ def main():
                         + float(dance_trajectory.get("height_amplitude", 0.06)) * np.sin(phase * 0.5),
                     ]
                 commands, yaw_now = prepare_commands(raw_commands)
+                if len(commands) >= 6 and pose_transition_time > 0.0:
+                    pose_target = torch.tensor(
+                        commands[3:6], dtype=torch.float32, device=device
+                    )
+                    control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
+                    alpha = min(control_dt / pose_transition_time, 1.0)
+                    pose_command_state[:] = torch.lerp(
+                        pose_command_state, pose_target, alpha
+                    )
+                    commands[3:6] = pose_command_state.tolist()
                 status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}"
                 if len(commands) >= 6:
                     status += (
@@ -491,7 +529,7 @@ def main():
                     pos_actions_scaled[wheel_ids] = 0.0
                     act = p_gains * (pos_actions_scaled + rl_dof_err) - d_gains * dof_vel
                     if abs(commands[0]) < command_deadband and abs(commands[1]) < command_deadband and abs(commands[2]) < command_deadband:
-                        act[wheel_ids] = -d_gains[wheel_ids] * dof_vel[wheel_ids]
+                        act[wheel_ids] = -wheel_park_damping * dof_vel[wheel_ids]
                     else:
                         act[wheel_ids] = (
                             actions_scaled[wheel_ids] * p_gains[wheel_ids]

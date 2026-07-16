@@ -32,7 +32,30 @@ class ZgwtDance(Zgwt):
         self.commands[:, self.HEIGHT_COMMAND] = self.cfg.rewards.default_body_height
         self.pose_command_targets[:, 2] = self.cfg.rewards.default_body_height
         self.episode_start_xy = self.root_states[:, :2].clone()
+        self.episode_start_support_xy = torch.mean(
+            self.feet_pos[:, :, :2], dim=1
+        ).clone()
+        self.support_anchor_pending = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
         self._resampling_for_reset = False
+
+        pair_a_names = []
+        pair_b_names = []
+        for pair_a, pair_b in (("FAR", "FBL"), ("RAR", "RBL")):
+            for joint in ("ABAD", "HIP", "KNEE"):
+                pair_a_names.append(f"{pair_a}_{joint}_JOINT")
+                pair_b_names.append(f"{pair_b}_{joint}_JOINT")
+        self.neutral_pair_a_indices = torch.tensor(
+            [self.dof_names.index(name) for name in pair_a_names],
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.neutral_pair_b_indices = torch.tensor(
+            [self.dof_names.index(name) for name in pair_b_names],
+            dtype=torch.long,
+            device=self.device,
+        )
 
     def _get_noise_scale_vec(self, cfg):
         command_dim = cfg.commands.num_commands
@@ -82,17 +105,26 @@ class ZgwtDance(Zgwt):
                 self.root_states[env_ids, :2] - self.episode_start_xy[env_ids], dim=1
             )
         )
+        support_xy = torch.mean(self.feet_pos[env_ids, :, :2], dim=1)
+        support_xy_drift = torch.mean(
+            torch.norm(
+                support_xy - self.episode_start_support_xy[env_ids], dim=1
+            )
+        )
 
         self._resampling_for_reset = True
         super().reset_idx(env_ids)
         self._resampling_for_reset = False
         self.episode_start_xy[env_ids] = self.root_states[env_ids, :2]
+        # Rigid-body state is refreshed on the next physics step after reset.
+        self.support_anchor_pending[env_ids] = True
 
         # Dance-specific diagnostics for TensorBoard.
         self.extras["episode"]["mean_abs_roll_error"] = roll_error
         self.extras["episode"]["mean_abs_pitch_error"] = pitch_error
         self.extras["episode"]["mean_abs_height_error"] = height_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
+        self.extras["episode"]["mean_support_xy_drift"] = support_xy_drift
 
     def _command_curriculum_fraction(self):
         duration = max(float(self.cfg.commands.curriculum_time), self.dt)
@@ -128,15 +160,22 @@ class ZgwtDance(Zgwt):
         # Mix isolated and combined commands so each degree of freedom is learned
         # before the policy sees the hardest corner combinations.
         mode = torch.randint(0, 5, (count,), device=self.device)
+        neutral_mask = torch.rand(count, device=self.device) < float(
+            self.cfg.commands.neutral_pose_prob
+        )
+        active_mask = ~neutral_mask
         targets = torch.zeros(count, 3, dtype=torch.float, device=self.device)
         targets[:, 2] = self.cfg.rewards.default_body_height
-        targets[mode == 0, 2] = sampled_height[mode == 0]
-        targets[mode == 1, 0] = sampled_roll[mode == 1]
-        targets[mode == 2, 1] = sampled_pitch[mode == 2]
-        two_axis = mode == 3
+        height_only = (mode == 0) & active_mask
+        roll_only = (mode == 1) & active_mask
+        pitch_only = (mode == 2) & active_mask
+        targets[height_only, 2] = sampled_height[height_only]
+        targets[roll_only, 0] = sampled_roll[roll_only]
+        targets[pitch_only, 1] = sampled_pitch[pitch_only]
+        two_axis = (mode == 3) & active_mask
         targets[two_axis, 0] = sampled_roll[two_axis]
         targets[two_axis, 1] = sampled_pitch[two_axis]
-        combined = mode == 4
+        combined = (mode == 4) & active_mask
         targets[combined, 0] = sampled_roll[combined]
         targets[combined, 1] = sampled_pitch[combined]
         targets[combined, 2] = sampled_height[combined]
@@ -151,6 +190,15 @@ class ZgwtDance(Zgwt):
             )
 
     def _post_physics_step_callback(self):
+        pending_ids = self.support_anchor_pending.nonzero(
+            as_tuple=False
+        ).flatten()
+        if len(pending_ids) > 0:
+            self.episode_start_support_xy[pending_ids] = torch.mean(
+                self.feet_pos[pending_ids, :, :2], dim=1
+            )
+            self.support_anchor_pending[pending_ids] = False
+
         resample_steps = max(
             1, int(self.cfg.commands.resampling_time / self.dt)
         )
@@ -253,7 +301,7 @@ class ZgwtDance(Zgwt):
         # Hard park the wheels for the first dance task. The policy still sees
         # wheel states/actions, but cannot translate the robot by driving them.
         torques[:, self.wheel_indices] = (
-            -self.d_gains[self.wheel_indices]
+            -float(self.cfg.control.wheel_park_damping)
             * self.Kd_factors
             * self.dof_vel[:, self.wheel_indices]
         )
@@ -306,4 +354,49 @@ class ZgwtDance(Zgwt):
     def _reward_base_position_drift(self):
         return torch.sum(
             torch.square(self.root_states[:, :2] - self.episode_start_xy), dim=1
+        )
+
+    def _reward_support_center_drift(self):
+        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
+        return torch.sum(
+            torch.square(support_xy - self.episode_start_support_xy), dim=1
+        )
+
+    def _reward_feet_horizontal_motion(self):
+        contact = (self.contact_forces[:, self.feet_indices, 2] > 5.0).float()
+        horizontal_speed_sq = torch.sum(
+            torch.square(self.feet_vel[:, :, :2]), dim=2
+        )
+        return torch.sum(horizontal_speed_sq * contact, dim=1)
+
+    def _reward_neutral_joint_pose(self):
+        """Keep a symmetric nominal stance only near the neutral pose command."""
+        neutral_weight = self._neutral_pose_weight()
+
+        joint_error = self.dof_pos - self.default_dof_pos
+        joint_error = joint_error.clone()
+        joint_error[:, self.wheel_indices] = 0.0
+        return torch.sum(torch.abs(joint_error), dim=1) * neutral_weight
+
+    def _reward_neutral_leg_symmetry(self):
+        """Match left/right leg deviations when the pose command is neutral."""
+        joint_error = self.dof_pos - self.default_dof_pos
+        pair_error = (
+            joint_error[:, self.neutral_pair_a_indices]
+            - joint_error[:, self.neutral_pair_b_indices]
+        )
+        return torch.sum(torch.abs(pair_error), dim=1) * self._neutral_pose_weight()
+
+    def _neutral_pose_weight(self):
+        """Return a smooth gate that disables stance rewards during dance."""
+        pose_command_error = torch.square(
+            self.commands[:, self.ROLL_COMMAND]
+        ) + torch.square(self.commands[:, self.PITCH_COMMAND])
+        height_command_error = torch.square(
+            self.commands[:, self.HEIGHT_COMMAND]
+            - self.cfg.rewards.default_body_height
+        )
+        return torch.exp(
+            -pose_command_error / self.cfg.rewards.neutral_orientation_sigma
+            -height_command_error / self.cfg.rewards.neutral_height_sigma
         )

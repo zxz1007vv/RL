@@ -75,25 +75,29 @@ def play(
         if env.cfg.commands.num_commands >= 6:
             # The dedicated dance policy is stationary by construction.
             env.commands[:, :3] = 0.0
+            pose_targets = torch.empty_like(env.commands[:, 3:6])
             if dance_trajectory:
                 phase = 2.0 * np.pi * dance_frequency * time_s
                 ramp = min(time_s / max(dance_ramp_time, env.dt), 1.0)
-                env.commands[:, 3] = ramp * roll_amplitude * np.sin(phase)
-                env.commands[:, 4] = ramp * pitch_amplitude * np.sin(
+                pose_targets[:, 0] = ramp * roll_amplitude * np.sin(phase)
+                pose_targets[:, 1] = ramp * pitch_amplitude * np.sin(
                     phase + np.pi / 2.0
                 )
                 dance_height = height_center + height_amplitude * np.sin(
                     phase * 0.5
                 )
-                env.commands[:, 5] = body_height + ramp * (
+                pose_targets[:, 2] = body_height + ramp * (
                     dance_height - body_height
                 )
             else:
-                env.commands[:, 3] = body_roll
-                env.commands[:, 4] = body_pitch
-                env.commands[:, 5] = body_height
+                pose_targets[:, 0] = body_roll
+                pose_targets[:, 1] = body_pitch
+                pose_targets[:, 2] = body_height
             if hasattr(env, "pose_command_targets"):
-                env.pose_command_targets[:] = env.commands[:, 3:6]
+                # Let the environment apply the same transition filter as training.
+                env.pose_command_targets[:] = pose_targets
+            else:
+                env.commands[:, 3:6] = pose_targets
         else:
             env.commands[:, 0] = x_vel
             env.commands[:, 1] = y_vel
@@ -199,10 +203,10 @@ if __name__ == '__main__':
     args = get_args()
     play(
         args,
-        x_vel=1.5,
+        x_vel=0.0,
         y_vel=0.0,
         yaw_vel=0.0,
-        dance_trajectory=True,
+        dance_trajectory=False,
         dance_ramp_time=3.0,
         dance_frequency=0.20,
         roll_amplitude=0.22,
@@ -210,7 +214,7 @@ if __name__ == '__main__':
         height_center=0.51,
         height_amplitude=0.05,
 
-        # body_roll=0.15,
-        # body_pitch=-0.12,
-        # body_height=0.50,
+        body_roll=0.00,
+        body_pitch=-0.00,
+        body_height=0.54,
     )

@@ -31,8 +31,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         num_commands = 6
         curriculum = False
         heading_command = False
-        resampling_time = 5.0
-        transition_time = 0.6
+        resampling_time = 10.0
+        transition_time = 0.25
         curriculum_time = 1200.0
         neutral_pose_prob = 0.30
         command_scales = [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
@@ -76,7 +76,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
             # Keep the robot at its spawn point and keep the wheels parked.
             base_position_drift = 0.0
-            support_center_drift = -5.0
+            support_center_drift = -10.0
             feet_horizontal_motion = -0.2
             base_stand_still = -2.0
             wheel_stand_still = -0.5
@@ -85,7 +85,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # Safety and smoothness. Fixed-level orientation, height, and joint
             # default rewards are deliberately absent because they oppose dance.
             collision = -1.0
-            feet_contact = -0.15
+            feet_contact = -0.4
             feet_stumble = -0.1
             action_rate = -0.003
             action_smoothness = -0.001
@@ -95,8 +95,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             dof_acc = -1.0e-8
             # Recover a symmetric nominal stance when pose commands are neutral.
             # The reward fades out for large dance commands in the robot class.
-            neutral_joint_pose = -0.5
-            neutral_leg_symmetry = -0.5
+            neutral_joint_pose = -0.75
+            lateral_leg_symmetry = -1.0
+            lateral_foot_alignment = -1.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
 
@@ -105,8 +106,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         height_tracking_sigma = 0.01
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
+        lateral_symmetry_roll_allowance = 2.0
         default_body_height = 0.54
-        termination_tilt = 0.65
+        termination_tilt = 0.55
         termination_min_height = 0.32
 
 
@@ -125,7 +127,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "pose_tracking_fast_anchored_16.v1"
+        run_name = "pose_tracking_fast_anchored_17.v2"
         resume = False
         load_run = -1
         checkpoint = -1

@@ -62,11 +62,6 @@ def play(
     env_cfg.terrain.num_cols = 8     #地形列数
     env_cfg.terrain.curriculum = True     #地形课程学习开关
     env_cfg.terrain.max_init_terrain_level = 9     #地形最大初始课程等级
-    env_cfg.noise.add_noise = False     #是否添加噪声
-    env_cfg.domain_rand.randomize_friction = False     #是否随机化摩擦系数
-    env_cfg.domain_rand.push_robots = False     #是否推机器人
-    env_cfg.domain_rand.disturbance = False     #是否扰动
-    env_cfg.domain_rand.randomize_payload_mass = False     #是否随机化负载质量
     env_cfg.commands.heading_command = False     #是否使用航向命令
     # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment

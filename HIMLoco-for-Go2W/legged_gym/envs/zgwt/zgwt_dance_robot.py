@@ -1,7 +1,7 @@
 import math
 
 import torch
-from isaacgym.torch_utils import torch_rand_float
+from isaacgym.torch_utils import quat_rotate_inverse, torch_rand_float
 
 from legged_gym.utils.math import get_scale_shift
 
@@ -378,14 +378,31 @@ class ZgwtDance(Zgwt):
         joint_error[:, self.wheel_indices] = 0.0
         return torch.sum(torch.abs(joint_error), dim=1) * neutral_weight
 
-    def _reward_neutral_leg_symmetry(self):
-        """Match left/right leg deviations when the pose command is neutral."""
+    def _reward_lateral_leg_symmetry(self):
+        """Limit unnecessary left/right joint asymmetry for every pose command."""
         joint_error = self.dof_pos - self.default_dof_pos
         pair_error = (
             joint_error[:, self.neutral_pair_a_indices]
             - joint_error[:, self.neutral_pair_b_indices]
         )
-        return torch.sum(torch.abs(pair_error), dim=1) * self._neutral_pose_weight()
+        allowed_asymmetry = (
+            torch.abs(self.commands[:, self.ROLL_COMMAND]).unsqueeze(1)
+            * self.cfg.rewards.lateral_symmetry_roll_allowance
+        )
+        excess_asymmetry = torch.clamp(
+            torch.abs(pair_error) - allowed_asymmetry, min=0.0
+        )
+        return torch.sum(excess_asymmetry, dim=1)
+
+    def _reward_lateral_foot_alignment(self):
+        """Keep each left/right wheel pair aligned in the body x direction."""
+        front_delta = self.feet_pos[:, 0, :] - self.feet_pos[:, 1, :]
+        rear_delta = self.feet_pos[:, 2, :] - self.feet_pos[:, 3, :]
+        front_delta_body = quat_rotate_inverse(self.base_quat, front_delta)
+        rear_delta_body = quat_rotate_inverse(self.base_quat, rear_delta)
+        return torch.abs(front_delta_body[:, 0]) + torch.abs(
+            rear_delta_body[:, 0]
+        )
 
     def _neutral_pose_weight(self):
         """Return a smooth gate that disables stance rewards during dance."""

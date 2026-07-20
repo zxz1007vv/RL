@@ -25,12 +25,12 @@ input:
     command_profile: "dance"
     start_request: "stand"
     stop_request: "rl"
-    max_roll: 0.25
-    max_pitch: 0.25
+    max_roll: 0.30
+    max_pitch: 0.28
     height_center: 0.54
-    height_range: 0.06
-    min_height: 0.44
-    max_height: 0.57
+    height_range: 0.08
+    min_height: 0.42
+    max_height: 0.59
     roll_sign: -1.0
     pitch_sign: -1.0
     height_sign: -1.0
@@ -51,9 +51,9 @@ commands:
     lin_vel_x: [0.0, 0.0]
     lin_vel_y: [0.0, 0.0]
     ang_vel_yaw: [0.0, 0.0]
-    body_roll: [-0.25, 0.25]
-    body_pitch: [-0.25, 0.25]
-    body_height: [0.44, 0.57]
+    body_roll: [-0.30, 0.30]
+    body_pitch: [-0.28, 0.28]
+    body_height: [0.42, 0.59]
   pose_defaults:
     body_roll: 0.0
     body_pitch: 0.0
@@ -62,7 +62,7 @@ commands:
     # Set true to ignore pose sticks and run the automatic sine trajectory.
     enabled: false
     frequency: 0.20
-    roll_amplitude: 0.22
-    pitch_amplitude: 0.20
+    roll_amplitude: 0.27
+    pitch_amplitude: 0.24
     height_center: 0.51
-    height_amplitude: 0.05
+    height_amplitude: 0.07

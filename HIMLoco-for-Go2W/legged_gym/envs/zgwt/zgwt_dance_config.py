@@ -33,7 +33,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         heading_command = False
         resampling_time = 10.0
         transition_time = 0.25
-        curriculum_time = 1200.0
+        curriculum_time = 1800.0
         neutral_pose_prob = 0.30
         command_scales = [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
 
@@ -42,9 +42,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             ang_vel_yaw = [0.0, 0.0]
-            body_roll = [-0.25, 0.25]
-            body_pitch = [-0.25, 0.25]
-            body_height = [0.44, 0.57]
+            body_roll = [-0.30, 0.30]
+            body_pitch = [-0.28, 0.28]
+            body_height = [0.42, 0.59]
 
         class initial_ranges:
             body_roll = [-0.08, 0.08]
@@ -127,7 +127,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "pose_tracking_fast_anchored_17.v2"
+        run_name = "pose_tracking_fast_anchored_18.v1"
         resume = False
         load_run = -1
         checkpoint = -1

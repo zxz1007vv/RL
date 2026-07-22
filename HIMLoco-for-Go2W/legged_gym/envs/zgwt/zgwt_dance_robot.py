@@ -10,7 +10,7 @@ from .zgwt_dance_config import ZGWTDanceCfg
 
 
 class ZgwtDance(Zgwt):
-    """Stationary ZGWT task tracking roll, pitch, and body-height commands."""
+    """In-place ZGWT task tracking yaw rate, roll, pitch, and body height."""
 
     cfg: ZGWTDanceCfg
 
@@ -28,6 +28,9 @@ class ZgwtDance(Zgwt):
         )
         self.pose_command_targets = torch.zeros(
             self.num_envs, 3, dtype=torch.float, device=self.device
+        )
+        self.yaw_command_targets = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device
         )
         self.commands[:, self.HEIGHT_COMMAND] = self.cfg.rewards.default_body_height
         self.pose_command_targets[:, 2] = self.cfg.rewards.default_body_height
@@ -100,6 +103,9 @@ class ZgwtDance(Zgwt):
         height_error = torch.mean(
             torch.abs(self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids])
         )
+        yaw_rate_error = torch.mean(
+            torch.abs(self.commands[env_ids, 2] - self.base_ang_vel[env_ids, 2])
+        )
         xy_drift = torch.mean(
             torch.norm(
                 self.root_states[env_ids, :2] - self.episode_start_xy[env_ids], dim=1
@@ -123,6 +129,7 @@ class ZgwtDance(Zgwt):
         self.extras["episode"]["mean_abs_roll_error"] = roll_error
         self.extras["episode"]["mean_abs_pitch_error"] = pitch_error
         self.extras["episode"]["mean_abs_height_error"] = height_error
+        self.extras["episode"]["mean_abs_yaw_rate_error"] = yaw_rate_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
         self.extras["episode"]["mean_support_xy_drift"] = support_xy_drift
 
@@ -142,11 +149,15 @@ class ZgwtDance(Zgwt):
         if len(env_ids) == 0:
             return
 
+        yaw_range = self._interpolated_range("ang_vel_yaw")
         roll_range = self._interpolated_range("body_roll")
         pitch_range = self._interpolated_range("body_pitch")
         height_range = self._interpolated_range("body_height")
         count = len(env_ids)
 
+        sampled_yaw = torch_rand_float(
+            yaw_range[0], yaw_range[1], (count, 1), device=self.device
+        ).squeeze(1)
         sampled_roll = torch_rand_float(
             roll_range[0], roll_range[1], (count, 1), device=self.device
         ).squeeze(1)
@@ -159,31 +170,41 @@ class ZgwtDance(Zgwt):
 
         # Mix isolated and combined commands so each degree of freedom is learned
         # before the policy sees the hardest corner combinations.
-        mode = torch.randint(0, 5, (count,), device=self.device)
+        mode = torch.randint(0, 7, (count,), device=self.device)
         neutral_mask = torch.rand(count, device=self.device) < float(
             self.cfg.commands.neutral_pose_prob
         )
         active_mask = ~neutral_mask
         targets = torch.zeros(count, 3, dtype=torch.float, device=self.device)
         targets[:, 2] = self.cfg.rewards.default_body_height
-        height_only = (mode == 0) & active_mask
-        roll_only = (mode == 1) & active_mask
-        pitch_only = (mode == 2) & active_mask
+        yaw_targets = torch.zeros(count, dtype=torch.float, device=self.device)
+        yaw_only = (mode == 0) & active_mask
+        height_only = (mode == 1) & active_mask
+        roll_only = (mode == 2) & active_mask
+        pitch_only = (mode == 3) & active_mask
+        yaw_targets[yaw_only] = sampled_yaw[yaw_only]
         targets[height_only, 2] = sampled_height[height_only]
         targets[roll_only, 0] = sampled_roll[roll_only]
         targets[pitch_only, 1] = sampled_pitch[pitch_only]
-        two_axis = (mode == 3) & active_mask
+        two_axis = (mode == 4) & active_mask
         targets[two_axis, 0] = sampled_roll[two_axis]
         targets[two_axis, 1] = sampled_pitch[two_axis]
-        combined = (mode == 4) & active_mask
+        pose_combined = (mode == 5) & active_mask
+        targets[pose_combined, 0] = sampled_roll[pose_combined]
+        targets[pose_combined, 1] = sampled_pitch[pose_combined]
+        targets[pose_combined, 2] = sampled_height[pose_combined]
+        combined = (mode == 6) & active_mask
+        yaw_targets[combined] = sampled_yaw[combined]
         targets[combined, 0] = sampled_roll[combined]
         targets[combined, 1] = sampled_pitch[combined]
         targets[combined, 2] = sampled_height[combined]
 
+        self.yaw_command_targets[env_ids] = yaw_targets
         self.pose_command_targets[env_ids] = targets
-        self.commands[env_ids, :3] = 0.0
+        self.commands[env_ids, :2] = 0.0
         if self._resampling_for_reset:
             # Start every reset from the nominal pose and then ramp to the target.
+            self.commands[env_ids, 2] = 0.0
             self.commands[env_ids, self.ROLL_COMMAND : self.HEIGHT_COMMAND + 1] = 0.0
             self.commands[env_ids, self.HEIGHT_COMMAND] = (
                 self.cfg.rewards.default_body_height
@@ -209,11 +230,14 @@ class ZgwtDance(Zgwt):
 
         transition_time = max(float(self.cfg.commands.transition_time), self.dt)
         alpha = min(self.dt / transition_time, 1.0)
+        self.commands[:, 2] = torch.lerp(
+            self.commands[:, 2], self.yaw_command_targets, alpha
+        )
         pose_commands = self.commands[
             :, self.ROLL_COMMAND : self.HEIGHT_COMMAND + 1
         ]
         pose_commands[:] = torch.lerp(pose_commands, self.pose_command_targets, alpha)
-        self.commands[:, :3] = 0.0
+        self.commands[:, :2] = 0.0
 
         if self.cfg.terrain.measure_heights:
             self.measured_heights = self._get_heights()
@@ -362,12 +386,24 @@ class ZgwtDance(Zgwt):
             torch.square(support_xy - self.episode_start_support_xy), dim=1
         )
 
+    def _reward_base_linear_motion(self):
+        """Suppress fore/aft and lateral pacing without opposing in-place yaw."""
+        return torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
+
     def _reward_feet_horizontal_motion(self):
         contact = (self.contact_forces[:, self.feet_indices, 2] > 5.0).float()
         horizontal_speed_sq = torch.sum(
             torch.square(self.feet_vel[:, :, :2]), dim=2
         )
         return torch.sum(horizontal_speed_sq * contact, dim=1)
+
+    def _reward_feet_air_horizontal_motion(self):
+        """Discourage stepping as an easy workaround during fast pose changes."""
+        air = (self.contact_forces[:, self.feet_indices, 2] <= 5.0).float()
+        horizontal_speed_sq = torch.sum(
+            torch.square(self.feet_vel[:, :, :2]), dim=2
+        )
+        return torch.sum(horizontal_speed_sq * air, dim=1)
 
     def _reward_neutral_joint_pose(self):
         """Keep a symmetric nominal stance only near the neutral pose command."""
@@ -388,6 +424,8 @@ class ZgwtDance(Zgwt):
         allowed_asymmetry = (
             torch.abs(self.commands[:, self.ROLL_COMMAND]).unsqueeze(1)
             * self.cfg.rewards.lateral_symmetry_roll_allowance
+            + torch.abs(self.commands[:, 2]).unsqueeze(1)
+            * self.cfg.rewards.lateral_symmetry_yaw_allowance
         )
         excess_asymmetry = torch.clamp(
             torch.abs(pair_error) - allowed_asymmetry, min=0.0
@@ -400,20 +438,27 @@ class ZgwtDance(Zgwt):
         rear_delta = self.feet_pos[:, 2, :] - self.feet_pos[:, 3, :]
         front_delta_body = quat_rotate_inverse(self.base_quat, front_delta)
         rear_delta_body = quat_rotate_inverse(self.base_quat, rear_delta)
-        return torch.abs(front_delta_body[:, 0]) + torch.abs(
-            rear_delta_body[:, 0]
+        yaw_gate = torch.exp(
+            -torch.square(self.commands[:, 2])
+            / self.cfg.rewards.yaw_symmetry_gate_sigma
         )
+        return (
+            torch.abs(front_delta_body[:, 0])
+            + torch.abs(rear_delta_body[:, 0])
+        ) * yaw_gate
 
     def _neutral_pose_weight(self):
         """Return a smooth gate that disables stance rewards during dance."""
         pose_command_error = torch.square(
             self.commands[:, self.ROLL_COMMAND]
         ) + torch.square(self.commands[:, self.PITCH_COMMAND])
+        yaw_command_error = torch.square(self.commands[:, 2])
         height_command_error = torch.square(
             self.commands[:, self.HEIGHT_COMMAND]
             - self.cfg.rewards.default_body_height
         )
         return torch.exp(
             -pose_command_error / self.cfg.rewards.neutral_orientation_sigma
+            -yaw_command_error / self.cfg.rewards.tracking_sigma
             -height_command_error / self.cfg.rewards.neutral_height_sigma
         )

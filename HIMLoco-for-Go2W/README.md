@@ -154,7 +154,7 @@ python legged_gym/scripts/train.py --task=go2w
 # ZGWT
 python legged_gym/scripts/train.py --task=zgwt
 
-# ZGWT 鸡头/舞蹈姿态跟踪（roll、pitch、body height）
+# ZGWT 原地舞蹈跟踪（yaw rate、roll、pitch、body height）
 python legged_gym/scripts/train.py --task=zgwt_dance
 
 # 新机器人初次验证时减少并行环境
@@ -203,7 +203,7 @@ tensorboard --logdir logs/GO2W --port 6006
 ```bash
 python legged_gym/scripts/play.py --task=zgwt --num_envs=1
 
-# 舞蹈策略（play.py 中可设置 body_roll/body_pitch/body_height）
+# 舞蹈策略（play.py 中可设置 yaw_vel/body_roll/body_pitch/body_height）
 python legged_gym/scripts/play.py --task=zgwt_dance --num_envs=1
 ```
 

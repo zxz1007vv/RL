@@ -69,7 +69,12 @@ def play(
     def set_test_commands(time_s=0.0):
         if env.cfg.commands.num_commands >= 6:
             # The dedicated dance policy is stationary by construction.
-            env.commands[:, :3] = 0.0
+            env.commands[:, :2] = 0.0
+            if hasattr(env, "yaw_command_targets"):
+                # Let the environment apply the same transition filter as training.
+                env.yaw_command_targets[:] = yaw_vel
+            else:
+                env.commands[:, 2] = yaw_vel
             pose_targets = torch.empty_like(env.commands[:, 3:6])
             if dance_trajectory:
                 phase = 2.0 * np.pi * dance_frequency * time_s
@@ -140,13 +145,17 @@ def play(
             cmd_roll = env.commands[robot_index, 3].item()
             cmd_pitch = env.commands[robot_index, 4].item()
             cmd_height = env.commands[robot_index, 5].item()
+            cmd_yaw_rate = env.commands[robot_index, 2].item()
 
             roll_now = actual_roll[robot_index].item()
             pitch_now = actual_pitch[robot_index].item()
             height_now = actual_height[robot_index].item()
+            yaw_rate_now = env.base_ang_vel[robot_index, 2].item()
 
             print(
                 "\n"
+                f"yaw rate: cmd={cmd_yaw_rate:+.3f}, actual={yaw_rate_now:+.3f}, "
+                f"error={cmd_yaw_rate-yaw_rate_now:+.3f}\n"
                 f"roll:   cmd={cmd_roll:+.3f}, actual={roll_now:+.3f}, "
                 f"error={cmd_roll-roll_now:+.3f}\n"
                 f"pitch:  cmd={cmd_pitch:+.3f}, actual={pitch_now:+.3f}, "

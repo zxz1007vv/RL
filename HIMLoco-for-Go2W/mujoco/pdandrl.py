@@ -317,6 +317,7 @@ def main():
         print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
+    yaw_command_state = torch.tensor(0.0, dtype=torch.float32, device=device)
     pose_command_state = torch.tensor(
         [
             float(pose_defaults.get("body_roll", 0.0)),
@@ -330,6 +331,7 @@ def main():
     def initial_policy_commands():
         commands, _ = prepare_commands(get_cmd())
         if len(commands) >= 6:
+            commands[2] = yaw_command_state.item()
             commands[3:6] = pose_command_state.tolist()
         return commands
 
@@ -360,6 +362,7 @@ def main():
                 print(" PD hold mode ......")
             elif pressed == '2' and policy is not None:
                 actions = torch.zeros(16, device=device)
+                yaw_command_state.zero_()
                 pose_command_state[:] = torch.tensor(
                     [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                     device=device,
@@ -405,6 +408,7 @@ def main():
                     print("\nRL blocked: press A and wait until standing is complete")
                 elif policy is not None:
                     actions = torch.zeros(16, device=device)
+                    yaw_command_state.zero_()
                     pose_command_state[:] = torch.tensor(
                         [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                         device=device,
@@ -417,6 +421,7 @@ def main():
             elif not startup_enabled and mode_request == "rl":
                 if policy is not None:
                     actions = torch.zeros(16, device=device)
+                    yaw_command_state.zero_()
                     pose_command_state[:] = torch.tensor(
                         [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                         device=device,
@@ -456,14 +461,21 @@ def main():
                     ]
                 commands, yaw_now = prepare_commands(raw_commands)
                 if len(commands) >= 6 and pose_transition_time > 0.0:
+                    yaw_target = torch.tensor(
+                        commands[2], dtype=torch.float32, device=device
+                    )
                     pose_target = torch.tensor(
                         commands[3:6], dtype=torch.float32, device=device
                     )
                     control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
                     alpha = min(control_dt / pose_transition_time, 1.0)
+                    yaw_command_state.copy_(torch.lerp(
+                        yaw_command_state, yaw_target, alpha
+                    ))
                     pose_command_state[:] = torch.lerp(
                         pose_command_state, pose_target, alpha
                     )
+                    commands[2] = yaw_command_state.item()
                     commands[3:6] = pose_command_state.tolist()
                 status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}"
                 if len(commands) >= 6:

@@ -32,22 +32,23 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         curriculum = False
         heading_command = False
         resampling_time = 8.0
-        transition_time = 0.20
+        transition_time = 0.30
         # Give the wider/faster command set enough time to unfold smoothly.
         curriculum_time = 2400.0
         neutral_pose_prob = 0.25
         command_scales = [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
 
         class ranges:
-            # The velocity commands remain exactly zero in this task.
+            # Linear velocity remains zero; yaw is an in-place angular-rate command.
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
-            ang_vel_yaw = [0.0, 0.0]
+            ang_vel_yaw = [-0.60, 0.60]
             body_roll = [-0.34, 0.34]
             body_pitch = [-0.32, 0.32]
             body_height = [0.40, 0.60]
 
         class initial_ranges:
+            ang_vel_yaw = [-0.15, 0.15]
             body_roll = [-0.08, 0.08]
             body_pitch = [-0.08, 0.08]
             body_height = [0.49, 0.55]
@@ -73,7 +74,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # The base reset currently uses 0.5--1.5 x default directly; do not widen it.
         initial_joint_pos_range = [0.5, 1.5]
         disturbance = True
-        disturbance_range = [-20.0, 20.0]
+        disturbance_range = [-10.0, 10.0]
         disturbance_interval = 8
         push_robots = True
         push_interval_s = 12
@@ -96,7 +97,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # Keep the robot at its spawn point and keep the wheels parked.
             base_position_drift = 0.0
             support_center_drift = -12.0
-            feet_horizontal_motion = -0.2
+            base_linear_motion = -1.0
+            feet_horizontal_motion = -0.3
+            feet_air_horizontal_motion = -0.15
             base_stand_still = -2.0
             wheel_stand_still = -0.5
             wheel_vel_stand_still = -2.0e-3
@@ -104,10 +107,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # Safety and smoothness. Fixed-level orientation, height, and joint
             # default rewards are deliberately absent because they oppose dance.
             collision = -1.0
-            feet_contact = -0.4
+            feet_contact = -0.6
             feet_stumble = -0.1
             action_rate = -0.003
-            action_smoothness = -0.001
+            action_smoothness = -0.0015
             torque_rate = -3.0e-7
             torques = -8.0e-6
             dof_vel = -1.0e-7
@@ -126,6 +129,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
         lateral_symmetry_roll_allowance = 2.0
+        lateral_symmetry_yaw_allowance = 0.75
+        yaw_symmetry_gate_sigma = 0.16
         default_body_height = 0.54
         termination_tilt = 0.55
         termination_min_height = 0.32

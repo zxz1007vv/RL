@@ -24,8 +24,9 @@ class CmdGenerator:
     Dance command mapping:
     - left stick left/right: body roll
     - left stick up/down: body pitch
+    - right stick left/right: yaw rate
     - right stick up/down: body height
-    - output: [0, 0, 0, body_roll, body_pitch, body_height]
+    - output: [0, 0, yaw_rate, body_roll, body_pitch, body_height]
     """
 
     def __init__(self, cfg=None):
@@ -194,7 +195,7 @@ class CmdGenerator:
                 if self.command_profile == "dance":
                     self.vx = 0.0
                     self.vy = 0.0
-                    self.yaw_target = 0.0
+                    self.yaw_target = -right_x * self.max_yaw_rate
                     self.body_roll = self.roll_sign * left_x * self.max_roll
                     self.body_pitch = self.pitch_sign * left_y * self.max_pitch
                     height = (
@@ -244,7 +245,7 @@ class CmdGenerator:
                 return [
                     0.0,
                     0.0,
-                    0.0,
+                    self.yaw_target,
                     self.body_roll,
                     self.body_pitch,
                     self.body_height,

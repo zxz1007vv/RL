@@ -31,10 +31,11 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         num_commands = 6
         curriculum = False
         heading_command = False
-        resampling_time = 10.0
-        transition_time = 0.25
-        curriculum_time = 1800.0
-        neutral_pose_prob = 0.30
+        resampling_time = 8.0
+        transition_time = 0.20
+        # Give the wider/faster command set enough time to unfold smoothly.
+        curriculum_time = 2400.0
+        neutral_pose_prob = 0.25
         command_scales = [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
 
         class ranges:
@@ -42,9 +43,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             ang_vel_yaw = [0.0, 0.0]
-            body_roll = [-0.30, 0.30]
-            body_pitch = [-0.28, 0.28]
-            body_height = [0.42, 0.59]
+            body_roll = [-0.34, 0.34]
+            body_pitch = [-0.32, 0.32]
+            body_height = [0.40, 0.60]
 
         class initial_ranges:
             body_roll = [-0.08, 0.08]
@@ -53,17 +54,35 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
         randomize_payload_mass = True
-        payload_mass_range = [0.0, 10.0]
+        payload_mass_range = [0.0, 12.0]
         randomize_com_displacement = True
-        com_displacement_range = [-0.08, 0.08]
+        com_displacement_range = [-0.05, 0.05]
+        randomize_link_mass = True
+        link_mass_range = [0.95, 1.05]
         randomize_friction = True
+        friction_range = [0.20, 1.40]
+        randomize_restitution = True
+        restitution_range = [0.0, 0.15]
         randomize_motor_strength = True
+        motor_strength_range = [0.85, 1.15]
         randomize_kp = True
+        kp_range = [0.85, 1.15]
         randomize_kd = True
+        kd_range = [0.80, 1.20]
         randomize_initial_joint_pos = True
+        # The base reset currently uses 0.5--1.5 x default directly; do not widen it.
+        initial_joint_pos_range = [0.5, 1.5]
         disturbance = True
+        disturbance_range = [-20.0, 20.0]
+        disturbance_interval = 8
         push_robots = True
+        push_interval_s = 12
+        max_push_vel_xy = 1.2
         delay = True
+
+    class noise(ZGWTRoughCfg.noise):
+        add_noise = True
+        noise_level = 1.15
 
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
@@ -76,7 +95,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
             # Keep the robot at its spawn point and keep the wheels parked.
             base_position_drift = 0.0
-            support_center_drift = -10.0
+            support_center_drift = -12.0
             feet_horizontal_motion = -0.2
             base_stand_still = -2.0
             wheel_stand_still = -0.5
@@ -127,7 +146,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "pose_tracking_fast_anchored_18.v1"
+        run_name = "721v1"
         resume = False
         load_run = -1
         checkpoint = -1

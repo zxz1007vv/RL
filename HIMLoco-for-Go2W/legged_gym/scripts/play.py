@@ -49,11 +49,11 @@ def play(
     body_height=0.54,
     dance_trajectory=True,
     dance_ramp_time=3.0,
-    dance_frequency=0.20,
-    roll_amplitude=0.27,
-    pitch_amplitude=0.24,
-    height_center=0.51,
-    height_amplitude=0.07,
+    dance_frequency=0.24,
+    roll_amplitude=0.31,
+    pitch_amplitude=0.28,
+    height_center=0.50,
+    height_amplitude=0.09,
 ):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -203,11 +203,11 @@ if __name__ == '__main__':
         yaw_vel=0.0,
         dance_trajectory=True,
         dance_ramp_time=3.0,
-        dance_frequency=0.20,
-        roll_amplitude=0.27,
-        pitch_amplitude=0.24,
-        height_center=0.51,
-        height_amplitude=0.07,
+        dance_frequency=0.24,
+        roll_amplitude=0.31,
+        pitch_amplitude=0.28,
+        height_center=0.50,
+        height_amplitude=0.09,
 
         # body_roll=0.00,
         # body_pitch=-0.00,

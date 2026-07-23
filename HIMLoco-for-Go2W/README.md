@@ -207,6 +207,10 @@ python legged_gym/scripts/play.py --task=zgwt --num_envs=1
 python legged_gym/scripts/play.py --task=zgwt_dance --num_envs=1
 ```
 
+`play.py` 的自动舞蹈轨迹包含 yaw rate，并默认从训练配置读取 yaw、roll、pitch
+和 body height 的完整命令范围；手动测试固定 yaw 时可将
+`dance_trajectory=False` 后设置 `yaw_vel`。
+
 加载指定 checkpoint：
 
 ```bash

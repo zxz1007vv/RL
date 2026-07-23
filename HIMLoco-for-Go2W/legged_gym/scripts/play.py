@@ -50,10 +50,11 @@ def play(
     dance_trajectory=True,
     dance_ramp_time=3.0,
     dance_frequency=0.24,
-    roll_amplitude=0.31,
-    pitch_amplitude=0.28,
-    height_center=0.50,
-    height_amplitude=0.09,
+    yaw_amplitude=None,
+    roll_amplitude=None,
+    pitch_amplitude=None,
+    height_center=None,
+    height_amplitude=None,
 ):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -66,19 +67,47 @@ def play(
     # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+
+    def command_center_and_amplitude(name):
+        lower, upper = env.command_ranges[name]
+        return 0.5 * (lower + upper), 0.5 * (upper - lower)
+
+    if env.cfg.commands.num_commands >= 6:
+        _, train_yaw_amplitude = command_center_and_amplitude("ang_vel_yaw")
+        _, train_roll_amplitude = command_center_and_amplitude("body_roll")
+        _, train_pitch_amplitude = command_center_and_amplitude("body_pitch")
+        train_height_center, train_height_amplitude = command_center_and_amplitude(
+            "body_height"
+        )
+        yaw_amplitude = (
+            train_yaw_amplitude if yaw_amplitude is None else yaw_amplitude
+        )
+        roll_amplitude = (
+            train_roll_amplitude if roll_amplitude is None else roll_amplitude
+        )
+        pitch_amplitude = (
+            train_pitch_amplitude if pitch_amplitude is None else pitch_amplitude
+        )
+        height_center = (
+            train_height_center if height_center is None else height_center
+        )
+        height_amplitude = (
+            train_height_amplitude if height_amplitude is None else height_amplitude
+        )
+
+    def clip_command(value, name):
+        lower, upper = env.command_ranges[name]
+        return np.clip(value, lower, upper)
+
     def set_test_commands(time_s=0.0):
         if env.cfg.commands.num_commands >= 6:
             # The dedicated dance policy is stationary by construction.
             env.commands[:, :2] = 0.0
-            if hasattr(env, "yaw_command_targets"):
-                # Let the environment apply the same transition filter as training.
-                env.yaw_command_targets[:] = yaw_vel
-            else:
-                env.commands[:, 2] = yaw_vel
             pose_targets = torch.empty_like(env.commands[:, 3:6])
             if dance_trajectory:
                 phase = 2.0 * np.pi * dance_frequency * time_s
                 ramp = min(time_s / max(dance_ramp_time, env.dt), 1.0)
+                yaw_target = ramp * yaw_amplitude * np.sin(phase)
                 pose_targets[:, 0] = ramp * roll_amplitude * np.sin(phase)
                 pose_targets[:, 1] = ramp * pitch_amplitude * np.sin(
                     phase + np.pi / 2.0
@@ -90,9 +119,19 @@ def play(
                     dance_height - body_height
                 )
             else:
+                yaw_target = yaw_vel
                 pose_targets[:, 0] = body_roll
                 pose_targets[:, 1] = body_pitch
                 pose_targets[:, 2] = body_height
+            yaw_target = clip_command(yaw_target, "ang_vel_yaw")
+            pose_targets[:, 0].clamp_(*env.command_ranges["body_roll"])
+            pose_targets[:, 1].clamp_(*env.command_ranges["body_pitch"])
+            pose_targets[:, 2].clamp_(*env.command_ranges["body_height"])
+            if hasattr(env, "yaw_command_targets"):
+                # Let the environment apply the same transition filter as training.
+                env.yaw_command_targets[:] = yaw_target
+            else:
+                env.commands[:, 2] = yaw_target
             if hasattr(env, "pose_command_targets"):
                 # Let the environment apply the same transition filter as training.
                 env.pose_command_targets[:] = pose_targets
@@ -213,10 +252,7 @@ if __name__ == '__main__':
         dance_trajectory=True,
         dance_ramp_time=3.0,
         dance_frequency=0.24,
-        roll_amplitude=0.31,
-        pitch_amplitude=0.28,
-        height_center=0.50,
-        height_amplitude=0.09,
+        # yaw/roll/pitch/height amplitudes default to the training ranges.
 
         # body_roll=0.00,
         # body_pitch=-0.00,

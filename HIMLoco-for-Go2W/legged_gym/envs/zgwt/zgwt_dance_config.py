@@ -97,7 +97,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # Keep the robot at its spawn point and keep the wheels parked.
             base_position_drift = 0.0
             support_center_drift = -12.0
-            base_linear_motion = -1.0
+            base_linear_motion = -2.0
+            yaw_in_place = -8.0
             feet_horizontal_motion = -0.3
             feet_air_horizontal_motion = -0.15
             base_stand_still = -2.0
@@ -131,6 +132,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         lateral_symmetry_roll_allowance = 2.0
         lateral_symmetry_yaw_allowance = 0.75
         yaw_symmetry_gate_sigma = 0.16
+        yaw_in_place_full_scale = 0.10
         default_body_height = 0.54
         termination_tilt = 0.55
         termination_min_height = 0.32

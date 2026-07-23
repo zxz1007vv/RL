@@ -117,6 +117,21 @@ class ZgwtDance(Zgwt):
                 support_xy - self.episode_start_support_xy[env_ids], dim=1
             )
         )
+        yaw_active = (
+            torch.abs(self.commands[env_ids, 2])
+            >= self.cfg.rewards.yaw_in_place_full_scale
+        ).float()
+        yaw_sample_count = torch.clamp(torch.sum(yaw_active), min=1.0)
+        yaw_xy_drift = torch.sum(
+            torch.norm(
+                self.root_states[env_ids, :2] - self.episode_start_xy[env_ids],
+                dim=1,
+            )
+            * yaw_active
+        ) / yaw_sample_count
+        yaw_forward_speed = torch.sum(
+            torch.abs(self.base_lin_vel[env_ids, 0]) * yaw_active
+        ) / yaw_sample_count
 
         self._resampling_for_reset = True
         super().reset_idx(env_ids)
@@ -132,6 +147,8 @@ class ZgwtDance(Zgwt):
         self.extras["episode"]["mean_abs_yaw_rate_error"] = yaw_rate_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
         self.extras["episode"]["mean_support_xy_drift"] = support_xy_drift
+        self.extras["episode"]["mean_yaw_xy_drift"] = yaw_xy_drift
+        self.extras["episode"]["mean_abs_yaw_lin_vel_x"] = yaw_forward_speed
 
     def _command_curriculum_fraction(self):
         duration = max(float(self.cfg.commands.curriculum_time), self.dt)
@@ -389,6 +406,25 @@ class ZgwtDance(Zgwt):
     def _reward_base_linear_motion(self):
         """Suppress fore/aft and lateral pacing without opposing in-place yaw."""
         return torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
+
+    def _reward_yaw_in_place(self):
+        """Keep the base near its spawn point while tracking a yaw-rate command."""
+        yaw_weight = torch.clamp(
+            torch.abs(self.commands[:, 2])
+            / self.cfg.rewards.yaw_in_place_full_scale,
+            max=1.0,
+        )
+        position_error = torch.sum(
+            torch.square(self.root_states[:, :2] - self.episode_start_xy), dim=1
+        )
+        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
+        support_error = torch.sum(
+            torch.square(support_xy - self.episode_start_support_xy), dim=1
+        )
+        planar_speed = torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
+        return yaw_weight * (
+            position_error + support_error + 0.25 * planar_speed
+        )
 
     def _reward_feet_horizontal_motion(self):
         contact = (self.contact_forces[:, self.feet_indices, 2] > 5.0).float()

@@ -154,7 +154,7 @@ python legged_gym/scripts/train.py --task=go2w
 # ZGWT
 python legged_gym/scripts/train.py --task=zgwt
 
-# ZGWT 原地舞蹈跟踪（yaw rate、roll、pitch、body height）
+# ZGWT 固定四足支点姿态跟踪（body yaw、roll、pitch、body height）
 python legged_gym/scripts/train.py --task=zgwt_dance
 
 # 新机器人初次验证时减少并行环境
@@ -203,13 +203,17 @@ tensorboard --logdir logs/GO2W --port 6006
 ```bash
 python legged_gym/scripts/play.py --task=zgwt --num_envs=1
 
-# 舞蹈策略（play.py 中可设置 yaw_vel/body_roll/body_pitch/body_height）
+# 舞蹈策略（play.py 中可设置 body_yaw/body_roll/body_pitch/body_height）
 python legged_gym/scripts/play.py --task=zgwt_dance --num_envs=1
 ```
 
-`play.py` 的自动舞蹈轨迹包含 yaw rate，并默认从训练配置读取 yaw、roll、pitch
-和 body height 的完整命令范围；手动测试固定 yaw 时可将
-`dance_trajectory=False` 后设置 `yaw_vel`。
+`play.py` 的自动舞蹈轨迹包含相对 RL 入场方向的有限 body-yaw 角度，并默认
+从训练配置读取 yaw、roll、pitch 和 body height 的完整命令范围；手动测试
+固定 yaw 姿态时可将 `dance_trajectory=False` 后设置 `body_yaw`。该 yaw
+不是持续转向速度，四个足端仍以进入 episode 时的位置为固定支撑锚点。固定
+四个轮点完成真实 body yaw 时，腿部从俯视图会呈对角协调；“压低一组对角腿”
+属于另一种鞍形姿态，并不等价于刚性机身绕竖直轴旋转。当前 body-yaw 限幅
+为 `±0.10 rad`，命令最大变化率为 `0.15 rad/s`。
 
 加载指定 checkpoint：
 
@@ -242,6 +246,10 @@ python pdandrl.py
 # ZGWT 舞蹈策略：使用零移动速度和默认平滑正弦姿态轨迹
 python pdandrl.py --config config_zgwt_dance.yaml
 ```
+
+舞蹈配置会在进入 RL 时记录四个轮轴角度，使用位置刚度和阻尼持续驻车，并在
+1 秒内将控制权从 PD 平滑交给策略。配置默认加载 `policy.pt`，即 `play.py`
+最近一次导出的 checkpoint。
 
 | 按键 | 功能 |
 | --- | --- |

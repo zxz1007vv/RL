@@ -563,13 +563,22 @@ class LeggedRobot(BaseTask):
 
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments
-        Positions are randomly selected within 0.5:1.5 x default positions.
+        Positions optionally use the configured multiplier around defaults.
         Velocities are set to zero.
 
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
+        if self.cfg.domain_rand.randomize_initial_joint_pos:
+            pos_range = self.cfg.domain_rand.initial_joint_pos_range
+            self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(
+                pos_range[0],
+                pos_range[1],
+                (len(env_ids), self.num_dof),
+                device=self.device,
+            )
+        else:
+            self.dof_pos[env_ids] = self.default_dof_pos
         self.dof_vel[env_ids] = 0.
 
         env_ids_int32 = env_ids.to(dtype=torch.int32)
@@ -592,7 +601,22 @@ class LeggedRobot(BaseTask):
             self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
         # base velocities
-        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        if getattr(
+            self.cfg.domain_rand, "randomize_initial_base_velocity", True
+        ):
+            vel_range = getattr(
+                self.cfg.domain_rand,
+                "initial_base_velocity_range",
+                [-0.5, 0.5],
+            )
+            self.root_states[env_ids, 7:13] = torch_rand_float(
+                vel_range[0],
+                vel_range[1],
+                (len(env_ids), 6),
+                device=self.device,
+            )
+        else:
+            self.root_states[env_ids, 7:13] = 0.0
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),

@@ -10,7 +10,7 @@ from .zgwt_dance_config import ZGWTDanceCfg
 
 
 class ZgwtDance(Zgwt):
-    """In-place ZGWT task tracking yaw rate, roll, pitch, and body height."""
+    """Fixed-support task tracking bounded body yaw, roll, pitch, and height."""
 
     cfg: ZGWTDanceCfg
 
@@ -35,12 +35,15 @@ class ZgwtDance(Zgwt):
         self.commands[:, self.HEIGHT_COMMAND] = self.cfg.rewards.default_body_height
         self.pose_command_targets[:, 2] = self.cfg.rewards.default_body_height
         self.episode_start_xy = self.root_states[:, :2].clone()
+        self.episode_start_yaw = self._current_yaw().clone()
         self.episode_start_support_xy = torch.mean(
             self.feet_pos[:, :, :2], dim=1
         ).clone()
+        self.episode_start_feet_xy = self.feet_pos[:, :, :2].clone()
         self.support_anchor_pending = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device
         )
+        self.wheel_park_targets = self.dof_pos[:, self.wheel_indices].clone()
         self._resampling_for_reset = False
 
         pair_a_names = []
@@ -103,9 +106,7 @@ class ZgwtDance(Zgwt):
         height_error = torch.mean(
             torch.abs(self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids])
         )
-        yaw_rate_error = torch.mean(
-            torch.abs(self.commands[env_ids, 2] - self.base_ang_vel[env_ids, 2])
-        )
+        yaw_error = torch.mean(torch.abs(self._body_yaw_error()[env_ids]))
         xy_drift = torch.mean(
             torch.norm(
                 self.root_states[env_ids, :2] - self.episode_start_xy[env_ids], dim=1
@@ -117,9 +118,16 @@ class ZgwtDance(Zgwt):
                 support_xy - self.episode_start_support_xy[env_ids], dim=1
             )
         )
+        feet_xy_drift = torch.mean(
+            torch.norm(
+                self.feet_pos[env_ids, :, :2]
+                - self.episode_start_feet_xy[env_ids],
+                dim=2,
+            )
+        )
         yaw_active = (
             torch.abs(self.commands[env_ids, 2])
-            >= self.cfg.rewards.yaw_in_place_full_scale
+            >= self.cfg.rewards.body_yaw_in_place_full_scale
         ).float()
         yaw_sample_count = torch.clamp(torch.sum(yaw_active), min=1.0)
         yaw_xy_drift = torch.sum(
@@ -137,6 +145,10 @@ class ZgwtDance(Zgwt):
         super().reset_idx(env_ids)
         self._resampling_for_reset = False
         self.episode_start_xy[env_ids] = self.root_states[env_ids, :2]
+        self.episode_start_yaw[env_ids] = self._current_yaw()[env_ids]
+        self.wheel_park_targets[env_ids] = self.dof_pos[
+            env_ids[:, None], self.wheel_indices
+        ]
         # Rigid-body state is refreshed on the next physics step after reset.
         self.support_anchor_pending[env_ids] = True
 
@@ -144,9 +156,11 @@ class ZgwtDance(Zgwt):
         self.extras["episode"]["mean_abs_roll_error"] = roll_error
         self.extras["episode"]["mean_abs_pitch_error"] = pitch_error
         self.extras["episode"]["mean_abs_height_error"] = height_error
-        self.extras["episode"]["mean_abs_yaw_rate_error"] = yaw_rate_error
+        # Override the base class' yaw-rate diagnostic: slot 2 is a body-yaw angle.
+        self.extras["episode"]["mean_abs_yaw_error"] = yaw_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
         self.extras["episode"]["mean_support_xy_drift"] = support_xy_drift
+        self.extras["episode"]["mean_feet_xy_drift"] = feet_xy_drift
         self.extras["episode"]["mean_yaw_xy_drift"] = yaw_xy_drift
         self.extras["episode"]["mean_abs_yaw_lin_vel_x"] = yaw_forward_speed
 
@@ -166,7 +180,7 @@ class ZgwtDance(Zgwt):
         if len(env_ids) == 0:
             return
 
-        yaw_range = self._interpolated_range("ang_vel_yaw")
+        yaw_range = self._interpolated_range("body_yaw")
         roll_range = self._interpolated_range("body_roll")
         pitch_range = self._interpolated_range("body_pitch")
         height_range = self._interpolated_range("body_height")
@@ -235,6 +249,9 @@ class ZgwtDance(Zgwt):
             self.episode_start_support_xy[pending_ids] = torch.mean(
                 self.feet_pos[pending_ids, :, :2], dim=1
             )
+            self.episode_start_feet_xy[pending_ids] = self.feet_pos[
+                pending_ids, :, :2
+            ]
             self.support_anchor_pending[pending_ids] = False
 
         resample_steps = max(
@@ -247,9 +264,13 @@ class ZgwtDance(Zgwt):
 
         transition_time = max(float(self.cfg.commands.transition_time), self.dt)
         alpha = min(self.dt / transition_time, 1.0)
-        self.commands[:, 2] = torch.lerp(
-            self.commands[:, 2], self.yaw_command_targets, alpha
+        max_yaw_step = float(self.cfg.commands.yaw_slew_rate) * self.dt
+        yaw_step = torch.clamp(
+            self.yaw_command_targets - self.commands[:, 2],
+            min=-max_yaw_step,
+            max=max_yaw_step,
         )
+        self.commands[:, 2] += yaw_step
         pose_commands = self.commands[
             :, self.ROLL_COMMAND : self.HEIGHT_COMMAND + 1
         ]
@@ -271,12 +292,17 @@ class ZgwtDance(Zgwt):
         dof_err = self.dof_pos - self.default_dof_pos
         dof_err = dof_err.clone()
         dof_err[:, self.wheel_indices] = 0.0
+        observed_commands = self.commands.clone()
+        # Absolute yaw is unobservable from projected gravity. Supplying the
+        # relative yaw error keeps the actor input Markovian without adding a
+        # new observation dimension.
+        observed_commands[:, 2] = self._body_yaw_error()
 
         actor_obs = torch.cat(
             (
                 self.base_ang_vel * self.obs_scales.ang_vel,
                 self.projected_gravity,
-                self.commands * self.commands_scale,
+                observed_commands * self.commands_scale,
                 dof_err * self.obs_scales.dof_pos,
                 self.dof_vel * self.obs_scales.dof_vel,
                 self.actions,
@@ -339,10 +365,14 @@ class ZgwtDance(Zgwt):
 
     def _compute_torques(self, actions):
         torques = super()._compute_torques(actions)
-        # Hard park the wheels for the first dance task. The policy still sees
-        # wheel states/actions, but cannot translate the robot by driving them.
+        # Position-hold the wheel axle at its reset angle. Damping alone only
+        # suppresses speed and still allows slow rolling during a body-yaw pose.
+        wheel_error = (
+            self.wheel_park_targets - self.dof_pos[:, self.wheel_indices]
+        )
         torques[:, self.wheel_indices] = (
-            -float(self.cfg.control.wheel_park_damping)
+            float(self.cfg.control.wheel_park_stiffness) * wheel_error
+            - float(self.cfg.control.wheel_park_damping)
             * self.Kd_factors
             * self.dof_vel[:, self.wheel_indices]
         )
@@ -374,6 +404,22 @@ class ZgwtDance(Zgwt):
         roll = torch.atan2(-gravity[:, 1], -gravity[:, 2])
         return roll, pitch
 
+    def _current_yaw(self):
+        quat = self.root_states[:, 3:7]
+        qx, qy, qz, qw = quat.unbind(dim=1)
+        return torch.atan2(
+            2.0 * (qw * qz + qx * qy),
+            1.0 - 2.0 * (qy * qy + qz * qz),
+        )
+
+    def _current_relative_yaw(self):
+        delta = self._current_yaw() - self.episode_start_yaw
+        return torch.atan2(torch.sin(delta), torch.cos(delta))
+
+    def _body_yaw_error(self):
+        error = self.commands[:, 2] - self._current_relative_yaw()
+        return torch.atan2(torch.sin(error), torch.cos(error))
+
     def _current_base_height(self):
         return torch.mean(
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
@@ -385,6 +431,10 @@ class ZgwtDance(Zgwt):
             dim=1,
         )
         return torch.exp(-error / self.cfg.rewards.orientation_tracking_sigma)
+
+    def _reward_tracking_body_yaw(self):
+        error = torch.square(self._body_yaw_error())
+        return torch.exp(-error / self.cfg.rewards.yaw_tracking_sigma)
 
     def _reward_tracking_body_height(self):
         error = torch.square(
@@ -403,15 +453,37 @@ class ZgwtDance(Zgwt):
             torch.square(support_xy - self.episode_start_support_xy), dim=1
         )
 
+    def _reward_feet_position_drift(self):
+        """Keep each support point anchored, not only their average center."""
+        return torch.sum(
+            torch.square(self.feet_pos[:, :, :2] - self.episode_start_feet_xy),
+            dim=(1, 2),
+        )
+
+    def _reward_tracking_feet_position(self):
+        """Dense bonus for keeping all four wheel centers at their reset points."""
+        error = self._reward_feet_position_drift()
+        return torch.exp(
+            -error / self.cfg.rewards.feet_position_tracking_sigma
+        )
+
+    def _reward_max_foot_position_drift(self):
+        """Prevent one wheel from moving while the other three hide the average."""
+        drift_sq = torch.sum(
+            torch.square(self.feet_pos[:, :, :2] - self.episode_start_feet_xy),
+            dim=2,
+        )
+        return torch.max(drift_sq, dim=1).values
+
     def _reward_base_linear_motion(self):
-        """Suppress fore/aft and lateral pacing without opposing in-place yaw."""
+        """Suppress fore/aft and lateral pacing during fixed-support poses."""
         return torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
 
-    def _reward_yaw_in_place(self):
-        """Keep the base near its spawn point while tracking a yaw-rate command."""
+    def _reward_body_yaw_in_place(self):
+        """Keep the base and support points fixed during body-yaw poses."""
         yaw_weight = torch.clamp(
             torch.abs(self.commands[:, 2])
-            / self.cfg.rewards.yaw_in_place_full_scale,
+            / self.cfg.rewards.body_yaw_in_place_full_scale,
             max=1.0,
         )
         position_error = torch.sum(
@@ -424,6 +496,22 @@ class ZgwtDance(Zgwt):
         planar_speed = torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
         return yaw_weight * (
             position_error + support_error + 0.25 * planar_speed
+        )
+
+    def _reward_yaw_rate(self):
+        """Settle at the requested body-yaw angle instead of continuously turning."""
+        return torch.square(self.base_ang_vel[:, 2])
+
+    def _reward_wheel_stand_still(self):
+        """Wheel actions are invalid for every command in fixed-support dance."""
+        return torch.sum(
+            torch.square(self.actions[:, self.wheel_indices]), dim=1
+        )
+
+    def _reward_wheel_vel_stand_still(self):
+        """Wheel speed must remain zero during roll, pitch, height, and yaw poses."""
+        return torch.sum(
+            torch.square(self.dof_vel[:, self.wheel_indices]), dim=1
         )
 
     def _reward_feet_horizontal_motion(self):
@@ -495,6 +583,6 @@ class ZgwtDance(Zgwt):
         )
         return torch.exp(
             -pose_command_error / self.cfg.rewards.neutral_orientation_sigma
-            -yaw_command_error / self.cfg.rewards.tracking_sigma
+            -yaw_command_error / self.cfg.rewards.yaw_tracking_sigma
             -height_command_error / self.cfg.rewards.neutral_height_sigma
         )

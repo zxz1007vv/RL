@@ -43,7 +43,7 @@ def play(
     args,
     x_vel=1.0,
     y_vel=0.0,
-    yaw_vel=0.0,
+    body_yaw=0.0,
     body_roll=0.0,
     body_pitch=0.0,
     body_height=0.54,
@@ -64,6 +64,14 @@ def play(
     env_cfg.terrain.curriculum = True     #地形课程学习开关
     env_cfg.terrain.max_init_terrain_level = 9     #地形最大初始课程等级
     env_cfg.commands.heading_command = False     #是否使用航向命令
+    # Evaluation starts from a clean, symmetric stance. Training robustness
+    # randomization should not obscure pose-tracking quality in play.
+    env_cfg.domain_rand.randomize_initial_joint_pos = False
+    env_cfg.domain_rand.randomize_initial_base_velocity = False
+    env_cfg.domain_rand.push_robots = False
+    env_cfg.domain_rand.disturbance = False
+    env_cfg.domain_rand.delay = False
+    env_cfg.noise.add_noise = False
     # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
@@ -73,7 +81,7 @@ def play(
         return 0.5 * (lower + upper), 0.5 * (upper - lower)
 
     if env.cfg.commands.num_commands >= 6:
-        _, train_yaw_amplitude = command_center_and_amplitude("ang_vel_yaw")
+        _, train_yaw_amplitude = command_center_and_amplitude("body_yaw")
         _, train_roll_amplitude = command_center_and_amplitude("body_roll")
         _, train_pitch_amplitude = command_center_and_amplitude("body_pitch")
         train_height_center, train_height_amplitude = command_center_and_amplitude(
@@ -119,11 +127,11 @@ def play(
                     dance_height - body_height
                 )
             else:
-                yaw_target = yaw_vel
+                yaw_target = body_yaw
                 pose_targets[:, 0] = body_roll
                 pose_targets[:, 1] = body_pitch
                 pose_targets[:, 2] = body_height
-            yaw_target = clip_command(yaw_target, "ang_vel_yaw")
+            yaw_target = clip_command(yaw_target, "body_yaw")
             pose_targets[:, 0].clamp_(*env.command_ranges["body_roll"])
             pose_targets[:, 1].clamp_(*env.command_ranges["body_pitch"])
             pose_targets[:, 2].clamp_(*env.command_ranges["body_height"])
@@ -140,7 +148,7 @@ def play(
         else:
             env.commands[:, 0] = x_vel
             env.commands[:, 1] = y_vel
-            env.commands[:, 2] = yaw_vel
+            env.commands[:, 2] = body_yaw
 
     set_test_commands(0.0)
 
@@ -184,17 +192,17 @@ def play(
             cmd_roll = env.commands[robot_index, 3].item()
             cmd_pitch = env.commands[robot_index, 4].item()
             cmd_height = env.commands[robot_index, 5].item()
-            cmd_yaw_rate = env.commands[robot_index, 2].item()
+            cmd_body_yaw = env.commands[robot_index, 2].item()
 
             roll_now = actual_roll[robot_index].item()
             pitch_now = actual_pitch[robot_index].item()
             height_now = actual_height[robot_index].item()
-            yaw_rate_now = env.base_ang_vel[robot_index, 2].item()
+            body_yaw_now = env._current_relative_yaw()[robot_index].item()
 
             print(
                 "\n"
-                f"yaw rate: cmd={cmd_yaw_rate:+.3f}, actual={yaw_rate_now:+.3f}, "
-                f"error={cmd_yaw_rate-yaw_rate_now:+.3f}\n"
+                f"body yaw: cmd={cmd_body_yaw:+.3f}, actual={body_yaw_now:+.3f}, "
+                f"error={cmd_body_yaw-body_yaw_now:+.3f}\n"
                 f"roll:   cmd={cmd_roll:+.3f}, actual={roll_now:+.3f}, "
                 f"error={cmd_roll-roll_now:+.3f}\n"
                 f"pitch:  cmd={cmd_pitch:+.3f}, actual={pitch_now:+.3f}, "
@@ -225,6 +233,7 @@ def play(
                     'base_vel_x': env.base_lin_vel[robot_index, 0].item(),
                     'base_vel_y': env.base_lin_vel[robot_index, 1].item(),
                     'base_vel_z': env.base_lin_vel[robot_index, 2].item(),
+                    'body_yaw': env._current_relative_yaw()[robot_index].item(),
                     'base_vel_yaw': env.base_ang_vel[robot_index, 2].item(),
                     'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
                 }
@@ -248,8 +257,8 @@ if __name__ == '__main__':
         args,
         x_vel=0.0,
         y_vel=0.0,
-        yaw_vel=0.0,
-        dance_trajectory=True,
+        body_yaw=1.0,
+        dance_trajectory=False,
         dance_ramp_time=3.0,
         dance_frequency=0.24,
         # yaw/roll/pitch/height amplitudes default to the training ranges.

@@ -24,31 +24,40 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         clip_actions = 3.0
 
     class control(ZGWTRoughCfg.control):
-        wheel_park_damping = 1.5
+        # A damping-only brake still lets the wheel angle drift. Position-hold
+        # each wheel at its reset angle so the four contact points cannot roll.
+        wheel_park_stiffness = 25.0
+        wheel_park_damping = 2.5
 
     class commands(ZGWTRoughCfg.commands):
-        # [vx, vy, yaw_rate, body_roll, body_pitch, body_height]
+        # [vx, vy, body_yaw_error, body_roll, body_pitch, body_height]
+        # The sampled body_yaw target is stored separately. The actor receives
+        # target_yaw - current_relative_yaw in command slot 2.
         num_commands = 6
         curriculum = False
         heading_command = False
         resampling_time = 8.0
-        transition_time = 0.30
+        transition_time = 1.0
+        # Independent hard limit for body-yaw target changes. A full reversal
+        # from +0.10 to -0.10 rad therefore takes at least 1.33 seconds.
+        yaw_slew_rate = 0.15
         # Give the wider/faster command set enough time to unfold smoothly.
         curriculum_time = 2400.0
-        neutral_pose_prob = 0.25
-        command_scales = [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
+        neutral_pose_prob = 0.30
+        command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
 
         class ranges:
-            # Linear velocity remains zero; yaw is an in-place angular-rate command.
+            # Linear velocity remains zero. body_yaw is a bounded angle relative
+            # to the heading captured at episode reset, not a continuous turn rate.
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
-            ang_vel_yaw = [-0.60, 0.60]
+            body_yaw = [-0.10, 0.10]
             body_roll = [-0.34, 0.34]
             body_pitch = [-0.32, 0.32]
-            body_height = [0.40, 0.60]
+            body_height = [0.40, 0.55]
 
         class initial_ranges:
-            ang_vel_yaw = [-0.15, 0.15]
+            body_yaw = [-0.02, 0.02]
             body_roll = [-0.08, 0.08]
             body_pitch = [-0.08, 0.08]
             body_height = [0.49, 0.55]
@@ -61,7 +70,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         randomize_link_mass = True
         link_mass_range = [0.95, 1.05]
         randomize_friction = True
-        friction_range = [0.20, 1.40]
+        # Fixed-support body poses require enough grip. Very low friction taught
+        # the old policy to satisfy yaw by translating the wheel contacts.
+        friction_range = [0.70, 1.30]
         randomize_restitution = True
         restitution_range = [0.0, 0.15]
         randomize_motor_strength = True
@@ -70,9 +81,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         kp_range = [0.85, 1.15]
         randomize_kd = True
         kd_range = [0.80, 1.20]
-        randomize_initial_joint_pos = True
-        # The base reset currently uses 0.5--1.5 x default directly; do not widen it.
-        initial_joint_pos_range = [0.5, 1.5]
+        randomize_initial_joint_pos = False
+        # Keep recovery diversity without starting from visibly crooked legs.
+        initial_joint_pos_range = [0.90, 1.10]
+        randomize_initial_base_velocity = False
         disturbance = True
         disturbance_range = [-10.0, 10.0]
         disturbance_interval = 8
@@ -89,18 +101,23 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         class scales:
             # Command tracking.
             tracking_body_orientation = 6.0   #roll pitch  4.0
+            tracking_body_yaw = 3.0
             tracking_body_height = 3.0
             tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
             tracking_lin_vy = 1.5
-            tracking_ang_vel = 1.0
+            tracking_ang_vel = 0.0
 
             # Keep the robot at its spawn point and keep the wheels parked.
             base_position_drift = 0.0
-            support_center_drift = -12.0
-            base_linear_motion = -2.0
-            yaw_in_place = -8.0
-            feet_horizontal_motion = -0.3
-            feet_air_horizontal_motion = -0.15
+            tracking_feet_position = 5.0
+            support_center_drift = -30.0
+            feet_position_drift = -60.0
+            max_foot_position_drift = -80.0
+            base_linear_motion = -4.0
+            body_yaw_in_place = -20.0
+            yaw_rate = -0.25
+            feet_horizontal_motion = -1.0
+            feet_air_horizontal_motion = -0.5
             base_stand_still = -2.0
             wheel_stand_still = -0.5
             wheel_vel_stand_still = -2.0e-3
@@ -110,29 +127,31 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             collision = -1.0
             feet_contact = -0.6
             feet_stumble = -0.1
-            action_rate = -0.003
-            action_smoothness = -0.0015
-            torque_rate = -3.0e-7
+            action_rate = -0.01
+            action_smoothness = -0.005
+            torque_rate = -1.0e-6
             torques = -8.0e-6
             dof_vel = -1.0e-7
             dof_acc = -1.0e-8
             # Recover a symmetric nominal stance when pose commands are neutral.
             # The reward fades out for large dance commands in the robot class.
-            neutral_joint_pose = -0.75
-            lateral_leg_symmetry = -1.0
-            lateral_foot_alignment = -1.0
+            neutral_joint_pose = -1.5
+            lateral_leg_symmetry = -3.0
+            lateral_foot_alignment = -3.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
 
         only_positive_rewards = False
         orientation_tracking_sigma = 0.06
+        yaw_tracking_sigma = 0.015
+        feet_position_tracking_sigma = 0.003
         height_tracking_sigma = 0.01
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
         lateral_symmetry_roll_allowance = 2.0
         lateral_symmetry_yaw_allowance = 0.75
-        yaw_symmetry_gate_sigma = 0.16
-        yaw_in_place_full_scale = 0.10
+        yaw_symmetry_gate_sigma = 0.01
+        body_yaw_in_place_full_scale = 0.05
         default_body_height = 0.54
         termination_tilt = 0.55
         termination_min_height = 0.32
@@ -140,7 +159,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
 class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
     class policy(ZGWTRoughCfgPPO.policy):
-        init_noise_std = 0.35
+        init_noise_std = 0.25
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
         learning_rate = 1.0e-4
@@ -153,7 +172,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "721v1"
+        run_name = "724v3_fixed_wheel_body_yaw"
         resume = False
         load_run = -1
         checkpoint = -1

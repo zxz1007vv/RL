@@ -2,11 +2,15 @@
 extends: "config_zgwt.yaml"
 
 paths:
-  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy14.v2.pt"
+  # play.py exports the currently selected checkpoint to this filename.
+  policy_path: "../logs/ZGWT_DANCE/exported/policies/policy.pt"
 
 # Startup: zero torque -> A folds the legs then stands -> B enters RL.
 start_in_rl: false
-wheel_park_damping: 1.5
+wheel_park_stiffness: 25.0
+wheel_park_damping: 2.5
+park_wheels_always: true
+rl_entry_blend_time: 1.0
 startup_sequence:
   enabled: true
   leg_order: ["FAR", "FBL", "RAR", "RBL"]
@@ -27,35 +31,35 @@ input:
     stop_request: "rl"
     max_roll: 0.34
     max_pitch: 0.32
-    max_yaw_rate: 0.60
-    yaw_mode: "yaw_rate"
+    max_body_yaw: 0.10
     height_center: 0.54
     height_range: 0.10
     min_height: 0.40
-    max_height: 0.60
+    max_height: 0.55
     roll_sign: -1.0
     pitch_sign: -1.0
     height_sign: -1.0
     axis_right_y: 4
 
 commands:
-  mode: "yaw_rate"
-  transition_time: 0.30
+  mode: "body_yaw"
+  transition_time: 1.0
+  yaw_slew_rate: 0.15
   policy_order:
     - lin_vel_x
     - lin_vel_y
-    - ang_vel_yaw
+    - body_yaw
     - body_roll
     - body_pitch
     - body_height
-  scales: [2.0, 2.0, 0.25, 1.0, 1.0, 2.0]
+  scales: [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
   ranges:
     lin_vel_x: [0.0, 0.0]
     lin_vel_y: [0.0, 0.0]
-    ang_vel_yaw: [-0.60, 0.60]
+    body_yaw: [-0.10, 0.10]
     body_roll: [-0.34, 0.34]
     body_pitch: [-0.32, 0.32]
-    body_height: [0.40, 0.60]
+    body_height: [0.40, 0.55]
   pose_defaults:
     body_roll: 0.0
     body_pitch: 0.0
@@ -64,7 +68,8 @@ commands:
     # Set true to ignore pose sticks and run the automatic sine trajectory.
     enabled: false
     frequency: 0.24
-    roll_amplitude: 0.31
-    pitch_amplitude: 0.28
-    height_center: 0.50
-    height_amplitude: 0.09
+    yaw_amplitude: 0.10
+    roll_amplitude: 0.34
+    pitch_amplitude: 0.32
+    height_center: 0.475
+    height_amplitude: 0.075

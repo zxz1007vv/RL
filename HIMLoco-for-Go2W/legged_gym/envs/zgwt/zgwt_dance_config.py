@@ -20,8 +20,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         max_init_terrain_level = 0
 
     class normalization(ZGWTRoughCfg.normalization):
-        # action_scale=0.25, so this caps joint-target offsets at +/-0.75 rad.
-        clip_actions = 3.0
+        # action_scale=0.25, so joint-target offsets are capped at +/-0.50 rad.
+        # This prevents one bad PPO update from immediately folding the legs.
+        clip_actions = 2.0
 
     class control(ZGWTRoughCfg.control):
         # A damping-only brake still lets the wheel angle drift. Position-hold
@@ -99,7 +100,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
-            # Command tracking.
+            # 跟踪
             tracking_body_orientation = 6.0   #roll pitch  4.0
             tracking_body_yaw = 3.0
             tracking_body_height = 3.0
@@ -107,37 +108,36 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             tracking_lin_vy = 1.5
             tracking_ang_vel = 0.0
 
-            # Keep the robot at its spawn point and keep the wheels parked.
+            # 固定支撑点位置
             base_position_drift = 0.0
-            tracking_feet_position = 5.0
-            support_center_drift = -30.0
-            feet_position_drift = -60.0
-            max_foot_position_drift = -80.0
-            base_linear_motion = -4.0
-            body_yaw_in_place = -20.0
-            yaw_rate = -0.25
-            feet_horizontal_motion = -1.0
-            feet_air_horizontal_motion = -0.5
+            tracking_feet_position = 2.0
+            support_center_drift = -15.0
+            feet_position_drift = -20.0
+            max_foot_position_drift = -25.0
+            base_linear_motion = -2.5
+            body_yaw_in_place = -10.0
+            yaw_rate = -0.20
+            feet_horizontal_motion = -0.5
+            feet_air_horizontal_motion = -0.25
             base_stand_still = -2.0
             wheel_stand_still = -0.5
             wheel_vel_stand_still = -2.0e-3
 
-            # Safety and smoothness. Fixed-level orientation, height, and joint
-            # default rewards are deliberately absent because they oppose dance.
+            # 稳定性
             collision = -1.0
             feet_contact = -0.6
             feet_stumble = -0.1
-            action_rate = -0.01
-            action_smoothness = -0.005
-            torque_rate = -1.0e-6
+            action_rate = -0.005
+            action_smoothness = -0.0025
+            torque_rate = -5.0e-7
             torques = -8.0e-6
             dof_vel = -1.0e-7
             dof_acc = -1.0e-8
-            # Recover a symmetric nominal stance when pose commands are neutral.
-            # The reward fades out for large dance commands in the robot class.
-            neutral_joint_pose = -1.5
-            lateral_leg_symmetry = -3.0
-            lateral_foot_alignment = -3.0
+
+            # 姿态对称性和关节限制
+            neutral_joint_pose = -1.0
+            lateral_leg_symmetry = -1.5
+            lateral_foot_alignment = -1.5
             dof_pos_limits = -2.0
             torque_limits = -0.1
 
@@ -163,7 +163,9 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
         learning_rate = 1.0e-4
-        schedule = "adaptive"
+        # Adaptive scheduling raised 1e-4 to 6.67e-3 around iteration 500 in
+        # the failed run, after which value loss jumped above 1e3.
+        schedule = "fixed"
         desired_kl = 0.01
         entropy_coef = 0.001
         clip_param = 0.15
@@ -172,7 +174,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "724v3_fixed_wheel_body_yaw"
+        run_name = "724v4_fixed_lr_body_yaw"
         resume = False
         load_run = -1
         checkpoint = -1

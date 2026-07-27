@@ -257,7 +257,8 @@ if __name__ == '__main__':
         args,
         x_vel=0.0,
         y_vel=0.0,
-        body_yaw=1.0,
+        # body_yaw is an angle in radians; values above 0.10 are clipped.
+        body_yaw=0.10,
         dance_trajectory=False,
         dance_ramp_time=3.0,
         dance_frequency=0.24,

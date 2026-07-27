@@ -448,17 +448,28 @@ class ZgwtDance(Zgwt):
         )
 
     def _reward_support_center_drift(self):
+        return torch.square(self._support_anchor_excess())
+
+    def _support_anchor_excess(self):
         support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
-        return torch.sum(
-            torch.square(support_xy - self.episode_start_support_xy), dim=1
+        drift = torch.norm(
+            support_xy - self.episode_start_support_xy, dim=1
+        )
+        return torch.clamp(
+            drift - float(self.cfg.rewards.support_anchor_deadzone), min=0.0
+        )
+
+    def _feet_anchor_excess(self):
+        drift = torch.norm(
+            self.feet_pos[:, :, :2] - self.episode_start_feet_xy, dim=2
+        )
+        return torch.clamp(
+            drift - float(self.cfg.rewards.feet_anchor_deadzone), min=0.0
         )
 
     def _reward_feet_position_drift(self):
-        """Keep each support point anchored, not only their average center."""
-        return torch.sum(
-            torch.square(self.feet_pos[:, :, :2] - self.episode_start_feet_xy),
-            dim=(1, 2),
-        )
+        """Penalize meaningful support movement, not contact jitter."""
+        return torch.sum(torch.square(self._feet_anchor_excess()), dim=1)
 
     def _reward_tracking_feet_position(self):
         """Dense bonus for keeping all four wheel centers at their reset points."""
@@ -469,10 +480,7 @@ class ZgwtDance(Zgwt):
 
     def _reward_max_foot_position_drift(self):
         """Prevent one wheel from moving while the other three hide the average."""
-        drift_sq = torch.sum(
-            torch.square(self.feet_pos[:, :, :2] - self.episode_start_feet_xy),
-            dim=2,
-        )
+        drift_sq = torch.square(self._feet_anchor_excess())
         return torch.max(drift_sq, dim=1).values
 
     def _reward_base_linear_motion(self):
@@ -489,10 +497,7 @@ class ZgwtDance(Zgwt):
         position_error = torch.sum(
             torch.square(self.root_states[:, :2] - self.episode_start_xy), dim=1
         )
-        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
-        support_error = torch.sum(
-            torch.square(support_xy - self.episode_start_support_xy), dim=1
-        )
+        support_error = torch.square(self._support_anchor_excess())
         planar_speed = torch.sum(torch.square(self.base_lin_vel[:, :2]), dim=1)
         return yaw_weight * (
             position_error + support_error + 0.25 * planar_speed
@@ -528,6 +533,10 @@ class ZgwtDance(Zgwt):
             torch.square(self.feet_vel[:, :, :2]), dim=2
         )
         return torch.sum(horizontal_speed_sq * air, dim=1)
+
+    def _reward_feet_vertical_motion(self):
+        """Suppress wheel lift and vertical chatter during body poses."""
+        return torch.sum(torch.square(self.feet_vel[:, :, 2]), dim=1)
 
     def _reward_neutral_joint_pose(self):
         """Keep a symmetric nominal stance only near the neutral pose command."""

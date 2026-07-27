@@ -213,7 +213,7 @@ python legged_gym/scripts/play.py --task=zgwt_dance --num_envs=1
 不是持续转向速度，四个足端仍以进入 episode 时的位置为固定支撑锚点。固定
 四个轮点完成真实 body yaw 时，腿部从俯视图会呈对角协调；“压低一组对角腿”
 属于另一种鞍形姿态，并不等价于刚性机身绕竖直轴旋转。当前 body-yaw 限幅
-为 `±0.10 rad`，命令最大变化率为 `0.15 rad/s`。
+为 `±0.10 rad`，训练与部署的最大变化率均为 `0.30 rad/s`。
 
 加载指定 checkpoint：
 

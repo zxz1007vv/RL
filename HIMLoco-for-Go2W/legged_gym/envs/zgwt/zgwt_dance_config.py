@@ -38,10 +38,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         curriculum = False
         heading_command = False
         resampling_time = 8.0
-        transition_time = 1.0
+        transition_time = 0.5
         # Independent hard limit for body-yaw target changes. A full reversal
-        # from +0.10 to -0.10 rad therefore takes at least 1.33 seconds.
-        yaw_slew_rate = 0.15
+        # from +0.10 to -0.10 rad therefore takes at least 0.67 seconds.
+        yaw_slew_rate = 0.30
         # Give the wider/faster command set enough time to unfold smoothly.
         curriculum_time = 2400.0
         neutral_pose_prob = 0.30
@@ -53,8 +53,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             body_yaw = [-0.10, 0.10]
-            body_roll = [-0.34, 0.34]
-            body_pitch = [-0.32, 0.32]
+            body_roll = [-0.26, 0.26]
+            body_pitch = [-0.26, 0.26]
             body_height = [0.40, 0.55]
 
         class initial_ranges:
@@ -125,8 +125,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
             # 稳定性
             collision = -1.0
-            feet_contact = -0.6
+            feet_contact = -1.0  #-0.6
             feet_stumble = -0.1
+            feet_vertical_motion = -0.1
             action_rate = -0.005
             action_smoothness = -0.0025
             torque_rate = -5.0e-7
@@ -145,6 +146,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         orientation_tracking_sigma = 0.06
         yaw_tracking_sigma = 0.015
         feet_position_tracking_sigma = 0.003
+        # Ignore solver/contact jitter inside these radii. The wheel axle is
+        # still position-held; meaningful support movement remains penalized.
+        feet_anchor_deadzone = 0.015
+        support_anchor_deadzone = 0.010
         height_tracking_sigma = 0.01
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
@@ -174,7 +179,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "724v4_fixed_lr_body_yaw"
+        run_name = "727v7_soft_anchor_transition_0p5"
         resume = False
         load_run = -1
         checkpoint = -1

@@ -29,8 +29,8 @@ input:
     command_profile: "dance"
     start_request: "stand"
     stop_request: "rl"
-    max_roll: 0.34
-    max_pitch: 0.32
+    max_roll: 0.26
+    max_pitch: 0.26
     max_body_yaw: 0.10
     height_center: 0.54
     height_range: 0.10
@@ -43,8 +43,8 @@ input:
 
 commands:
   mode: "body_yaw"
-  transition_time: 1.0
-  yaw_slew_rate: 0.15
+  transition_time: 0.5
+  yaw_slew_rate: 0.30
   policy_order:
     - lin_vel_x
     - lin_vel_y
@@ -57,8 +57,8 @@ commands:
     lin_vel_x: [0.0, 0.0]
     lin_vel_y: [0.0, 0.0]
     body_yaw: [-0.10, 0.10]
-    body_roll: [-0.34, 0.34]
-    body_pitch: [-0.32, 0.32]
+    body_roll: [-0.26, 0.26]
+    body_pitch: [-0.26, 0.26]
     body_height: [0.40, 0.55]
   pose_defaults:
     body_roll: 0.0
@@ -69,7 +69,7 @@ commands:
     enabled: false
     frequency: 0.24
     yaw_amplitude: 0.10
-    roll_amplitude: 0.34
-    pitch_amplitude: 0.32
+    roll_amplitude: 0.26
+    pitch_amplitude: 0.26
     height_center: 0.475
     height_amplitude: 0.075

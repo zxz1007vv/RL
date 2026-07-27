@@ -44,7 +44,12 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         yaw_slew_rate = 0.30
         # Give the wider/faster command set enough time to unfold smoothly.
         curriculum_time = 2400.0
-        neutral_pose_prob = 0.30
+        # Explicit probabilities for:
+        # neutral, yaw, height, roll, pitch, roll+pitch, pose, all axes.
+        # The old neutral mask left only about 21% of episodes with a
+        # non-default height. Height is now active in 38% of episodes while a
+        # quarter of the environments still teaches a clean symmetric stance.
+        mode_probabilities = [0.25, 0.10, 0.25, 0.10, 0.10, 0.07, 0.08, 0.05]
         command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
 
         class ranges:
@@ -103,7 +108,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # 跟踪
             tracking_body_orientation = 6.0   #roll pitch  4.0
             tracking_body_yaw = 3.0
-            tracking_body_height = 3.0
+            tracking_body_height = 5.0
             tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
             tracking_lin_vy = 1.5
             tracking_ang_vel = 0.0
@@ -136,9 +141,11 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             dof_acc = -1.0e-8
 
             # 姿态对称性和关节限制
-            neutral_joint_pose = -1.0
-            lateral_leg_symmetry = -1.5
+            neutral_joint_pose = -1.5
+            lateral_leg_symmetry = -2.0
             lateral_foot_alignment = -1.5
+            height_leg_coordination = -2.0
+            pitch_leg_coordination = -2.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
 
@@ -150,9 +157,15 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # still position-held; meaningful support movement remains penalized.
         feet_anchor_deadzone = 0.015
         support_anchor_deadzone = 0.010
-        height_tracking_sigma = 0.01
+        # This reward uses squared height error. sigma=0.01 still retained 78%
+        # of the bonus at 5 cm error, which let the policy ignore crouch.
+        height_tracking_sigma = 0.0025
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
+        height_coordination_full_scale = 0.05
+        height_coordination_orientation_sigma = 0.0025
+        pitch_coordination_full_scale = 0.10
+        pitch_coordination_other_axis_sigma = 0.0025
         lateral_symmetry_roll_allowance = 2.0
         lateral_symmetry_yaw_allowance = 0.75
         yaw_symmetry_gate_sigma = 0.01
@@ -179,7 +192,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "727v7_soft_anchor_transition_0p5"
+        run_name = "727v2_height_structured_pose"
         resume = False
         load_run = -1
         checkpoint = -1

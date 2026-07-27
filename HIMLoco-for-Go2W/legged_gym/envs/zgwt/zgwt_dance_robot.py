@@ -62,6 +62,40 @@ class ZgwtDance(Zgwt):
             dtype=torch.long,
             device=self.device,
         )
+        leg_order = ("FAR", "FBL", "RAR", "RBL")
+        self.leg_abad_indices = torch.tensor(
+            [self.dof_names.index(f"{leg}_ABAD_JOINT") for leg in leg_order],
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.leg_hip_indices = torch.tensor(
+            [self.dof_names.index(f"{leg}_HIP_JOINT") for leg in leg_order],
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.leg_knee_indices = torch.tensor(
+            [self.dof_names.index(f"{leg}_KNEE_JOINT") for leg in leg_order],
+            dtype=torch.long,
+            device=self.device,
+        )
+        # Convert front/rear joint signs into one common positive crouch axis.
+        self.crouch_hip_sign = torch.tensor(
+            [-1.0, -1.0, 1.0, 1.0], device=self.device
+        )
+        self.crouch_knee_sign = torch.tensor(
+            [1.0, 1.0, -1.0, -1.0], device=self.device
+        )
+        mode_probabilities = torch.tensor(
+            self.cfg.commands.mode_probabilities,
+            dtype=torch.float,
+            device=self.device,
+        )
+        if mode_probabilities.numel() != 8 or torch.any(mode_probabilities < 0):
+            raise ValueError("dance mode_probabilities must contain 8 non-negative values")
+        probability_sum = torch.sum(mode_probabilities)
+        if probability_sum <= 0:
+            raise ValueError("dance mode_probabilities must have a positive sum")
+        self.command_mode_probabilities = mode_probabilities / probability_sum
 
     def _get_noise_scale_vec(self, cfg):
         command_dim = cfg.commands.num_commands
@@ -103,9 +137,35 @@ class ZgwtDance(Zgwt):
         pitch_error = torch.mean(
             torch.abs(self.commands[env_ids, self.PITCH_COMMAND] - pitch[env_ids])
         )
-        height_error = torch.mean(
-            torch.abs(self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids])
+        height_abs_error = torch.abs(
+            self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids]
         )
+        height_error = torch.mean(height_abs_error)
+        height_active = (
+            torch.abs(
+                self.commands[env_ids, self.HEIGHT_COMMAND]
+                - self.cfg.rewards.default_body_height
+            )
+            >= 0.02
+        ).float()
+        height_active_count = torch.clamp(torch.sum(height_active), min=1.0)
+        height_active_error = torch.sum(
+            height_abs_error * height_active
+        ) / height_active_count
+        joint_error = self.dof_pos[env_ids] - self.default_dof_pos[env_ids]
+        lateral_pair_error = torch.mean(
+            torch.abs(
+                joint_error[:, self.neutral_pair_a_indices]
+                - joint_error[:, self.neutral_pair_b_indices]
+            )
+        )
+        neutral_weight = self._neutral_pose_weight()[env_ids]
+        neutral_abad_error = torch.sum(
+            torch.mean(
+                torch.abs(joint_error[:, self.leg_abad_indices]), dim=1
+            )
+            * neutral_weight
+        ) / torch.clamp(torch.sum(neutral_weight), min=1.0)
         yaw_error = torch.mean(torch.abs(self._body_yaw_error()[env_ids]))
         xy_drift = torch.mean(
             torch.norm(
@@ -156,6 +216,14 @@ class ZgwtDance(Zgwt):
         self.extras["episode"]["mean_abs_roll_error"] = roll_error
         self.extras["episode"]["mean_abs_pitch_error"] = pitch_error
         self.extras["episode"]["mean_abs_height_error"] = height_error
+        self.extras["episode"]["mean_abs_height_error_active"] = (
+            height_active_error
+        )
+        self.extras["episode"]["mean_height_active_fraction"] = torch.mean(
+            height_active
+        )
+        self.extras["episode"]["mean_lateral_pair_error"] = lateral_pair_error
+        self.extras["episode"]["mean_neutral_abad_error"] = neutral_abad_error
         # Override the base class' yaw-rate diagnostic: slot 2 is a body-yaw angle.
         self.extras["episode"]["mean_abs_yaw_error"] = yaw_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
@@ -201,30 +269,28 @@ class ZgwtDance(Zgwt):
 
         # Mix isolated and combined commands so each degree of freedom is learned
         # before the policy sees the hardest corner combinations.
-        mode = torch.randint(0, 7, (count,), device=self.device)
-        neutral_mask = torch.rand(count, device=self.device) < float(
-            self.cfg.commands.neutral_pose_prob
+        mode = torch.multinomial(
+            self.command_mode_probabilities, count, replacement=True
         )
-        active_mask = ~neutral_mask
         targets = torch.zeros(count, 3, dtype=torch.float, device=self.device)
         targets[:, 2] = self.cfg.rewards.default_body_height
         yaw_targets = torch.zeros(count, dtype=torch.float, device=self.device)
-        yaw_only = (mode == 0) & active_mask
-        height_only = (mode == 1) & active_mask
-        roll_only = (mode == 2) & active_mask
-        pitch_only = (mode == 3) & active_mask
+        yaw_only = mode == 1
+        height_only = mode == 2
+        roll_only = mode == 3
+        pitch_only = mode == 4
         yaw_targets[yaw_only] = sampled_yaw[yaw_only]
         targets[height_only, 2] = sampled_height[height_only]
         targets[roll_only, 0] = sampled_roll[roll_only]
         targets[pitch_only, 1] = sampled_pitch[pitch_only]
-        two_axis = (mode == 4) & active_mask
+        two_axis = mode == 5
         targets[two_axis, 0] = sampled_roll[two_axis]
         targets[two_axis, 1] = sampled_pitch[two_axis]
-        pose_combined = (mode == 5) & active_mask
+        pose_combined = mode == 6
         targets[pose_combined, 0] = sampled_roll[pose_combined]
         targets[pose_combined, 1] = sampled_pitch[pose_combined]
         targets[pose_combined, 2] = sampled_height[pose_combined]
-        combined = (mode == 6) & active_mask
+        combined = mode == 7
         yaw_targets[combined] = sampled_yaw[combined]
         targets[combined, 0] = sampled_roll[combined]
         targets[combined, 1] = sampled_pitch[combined]
@@ -557,7 +623,7 @@ class ZgwtDance(Zgwt):
         allowed_asymmetry = (
             torch.abs(self.commands[:, self.ROLL_COMMAND]).unsqueeze(1)
             * self.cfg.rewards.lateral_symmetry_roll_allowance
-            + torch.abs(self.commands[:, 2]).unsqueeze(1)
+            + torch.abs(self.yaw_command_targets).unsqueeze(1)
             * self.cfg.rewards.lateral_symmetry_yaw_allowance
         )
         excess_asymmetry = torch.clamp(
@@ -572,13 +638,90 @@ class ZgwtDance(Zgwt):
         front_delta_body = quat_rotate_inverse(self.base_quat, front_delta)
         rear_delta_body = quat_rotate_inverse(self.base_quat, rear_delta)
         yaw_gate = torch.exp(
-            -torch.square(self.commands[:, 2])
+            -torch.square(self.yaw_command_targets)
             / self.cfg.rewards.yaw_symmetry_gate_sigma
         )
         return (
             torch.abs(front_delta_body[:, 0])
             + torch.abs(rear_delta_body[:, 0])
         ) * yaw_gate
+
+    def _reward_height_leg_coordination(self):
+        """Teach height-only commands as a clean four-leg crouch.
+
+        Height tracking alone allowed the actor to respond through one ABAD
+        joint. For an isolated crouch, keep ABAD near nominal and make all four
+        hip/knee flexions agree after accounting for rear-leg sign convention.
+        The orientation gate disables this prior when roll, pitch, or yaw
+        legitimately requires unequal leg lengths.
+        """
+        height_error = torch.abs(
+            self.commands[:, self.HEIGHT_COMMAND]
+            - self.cfg.rewards.default_body_height
+        )
+        height_weight = torch.clamp(
+            height_error / self.cfg.rewards.height_coordination_full_scale,
+            max=1.0,
+        )
+        orientation_error = (
+            torch.square(self.commands[:, self.ROLL_COMMAND])
+            + torch.square(self.commands[:, self.PITCH_COMMAND])
+            + torch.square(self.yaw_command_targets)
+        )
+        orientation_gate = torch.exp(
+            -orientation_error
+            / self.cfg.rewards.height_coordination_orientation_sigma
+        )
+
+        joint_error = self.dof_pos - self.default_dof_pos
+        abad_error = joint_error[:, self.leg_abad_indices]
+        hip_flexion = (
+            joint_error[:, self.leg_hip_indices] * self.crouch_hip_sign
+        )
+        knee_flexion = (
+            joint_error[:, self.leg_knee_indices] * self.crouch_knee_sign
+        )
+        coordination_error = (
+            torch.mean(torch.square(abad_error), dim=1)
+            + torch.var(hip_flexion, dim=1, unbiased=False)
+            + torch.var(knee_flexion, dim=1, unbiased=False)
+        )
+        return height_weight * orientation_gate * coordination_error
+
+    def _reward_pitch_leg_coordination(self):
+        """Keep pure pitch in the sagittal plane with paired front/rear legs."""
+        pitch_weight = torch.clamp(
+            torch.abs(self.commands[:, self.PITCH_COMMAND])
+            / self.cfg.rewards.pitch_coordination_full_scale,
+            max=1.0,
+        )
+        other_axis_error = (
+            torch.square(self.commands[:, self.ROLL_COMMAND])
+            + torch.square(self.yaw_command_targets)
+            + torch.square(
+                self.commands[:, self.HEIGHT_COMMAND]
+                - self.cfg.rewards.default_body_height
+            )
+        )
+        other_axis_gate = torch.exp(
+            -other_axis_error
+            / self.cfg.rewards.pitch_coordination_other_axis_sigma
+        )
+
+        joint_error = self.dof_pos - self.default_dof_pos
+        abad_error = joint_error[:, self.leg_abad_indices]
+        hip_error = joint_error[:, self.leg_hip_indices]
+        knee_error = joint_error[:, self.leg_knee_indices]
+        pair_error = (
+            torch.square(hip_error[:, 0] - hip_error[:, 1])
+            + torch.square(hip_error[:, 2] - hip_error[:, 3])
+            + torch.square(knee_error[:, 0] - knee_error[:, 1])
+            + torch.square(knee_error[:, 2] - knee_error[:, 3])
+        )
+        coordination_error = (
+            torch.mean(torch.square(abad_error), dim=1) + pair_error
+        )
+        return pitch_weight * other_axis_gate * coordination_error
 
     def _neutral_pose_weight(self):
         """Return a smooth gate that disables stance rewards during dance."""

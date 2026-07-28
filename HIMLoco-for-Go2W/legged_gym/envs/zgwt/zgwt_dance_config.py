@@ -46,9 +46,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         curriculum_time = 2400.0
         # Explicit probabilities for:
         # neutral, yaw, height, roll, pitch, roll+pitch, pose, all axes.
-        # Height is active in 32% of episodes. Keep 30% neutral samples so the
-        # policy cannot trade away its deploy-time entry posture for crouching.
-        mode_probabilities = [0.30, 0.10, 0.20, 0.10, 0.10, 0.08, 0.07, 0.05]
+        # Stage 1 emphasizes isolated command tracking. Active fractions are:
+        # yaw 25%, height 35%, roll 28%, pitch 37%. Fifteen percent neutral
+        # samples still preserve a clean deploy-time entry posture.
+        mode_probabilities = [0.15, 0.20, 0.20, 0.08, 0.17, 0.05, 0.10, 0.05]
         command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
 
         class ranges:
@@ -68,46 +69,49 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             body_height = [0.49, 0.55]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        randomize_payload_mass = True
+        # Stage 1 learns the nominal fixed-support pose task first. Re-enable
+        # narrow randomization only after active command errors have converged.
+        randomize_payload_mass = False
         payload_mass_range = [0.0, 12.0]
-        randomize_com_displacement = True
+        randomize_com_displacement = False
         com_displacement_range = [-0.05, 0.05]
-        randomize_link_mass = True
+        randomize_link_mass = False
         link_mass_range = [0.95, 1.05]
-        randomize_friction = True
-        # Fixed-support body poses require enough grip. Very low friction taught
-        # the old policy to satisfy yaw by translating the wheel contacts.
+        randomize_friction = False
         friction_range = [0.70, 1.30]
-        randomize_restitution = True
+        randomize_restitution = False
         restitution_range = [0.0, 0.15]
-        randomize_motor_strength = True
+        randomize_motor_strength = False
         motor_strength_range = [0.85, 1.15]
-        randomize_kp = True
+        randomize_kp = False
         kp_range = [0.85, 1.15]
-        randomize_kd = True
+        randomize_kd = False
         kd_range = [0.80, 1.20]
         randomize_initial_joint_pos = False
         # Keep recovery diversity without starting from visibly crooked legs.
         initial_joint_pos_range = [0.90, 1.10]
         randomize_initial_base_velocity = False
-        disturbance = True
+        disturbance = False
         disturbance_range = [-10.0, 10.0]
         disturbance_interval = 8
-        push_robots = True
+        push_robots = False
         push_interval_s = 12
         max_push_vel_xy = 1.2
-        delay = True
+        delay = False
 
     class noise(ZGWTRoughCfg.noise):
-        add_noise = True
-        noise_level = 1.15
+        add_noise = False
+        noise_level = 0.0
 
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
-            # 跟踪
-            tracking_body_orientation = 6.0   #roll pitch  4.0
-            tracking_body_yaw = 3.0
-            tracking_body_height = 4.0
+            # Independent command tracking. Each term is internally weighted so
+            # active commands dominate while inactive axes retain a weak hold.
+            tracking_body_orientation = 0.0
+            tracking_body_roll = 5.0
+            tracking_body_pitch = 8.0
+            tracking_body_yaw = 8.0
+            tracking_body_height = 8.0
             tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
             tracking_lin_vy = 1.5
             tracking_ang_vel = 0.0
@@ -150,8 +154,22 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             torque_limits = -0.1
 
         only_positive_rewards = False
-        orientation_tracking_sigma = 0.06
-        yaw_tracking_sigma = 0.015
+        #reward = exp(-(实际值 - 命令值)² / sigma)
+
+        roll_tracking_sigma = 0.025
+        pitch_tracking_sigma = 0.020
+        yaw_tracking_sigma = 0.005
+        # Inactive axes receive only this fraction of their tracking reward.
+        # This preserves neutral-axis stability without letting zero commands
+        # dominate the policy gradient and TensorBoard reward.
+        inactive_command_tracking_weight = 0.10
+        roll_tracking_full_scale = 0.08
+        pitch_tracking_full_scale = 0.08
+        yaw_tracking_full_scale = 0.04
+        height_tracking_full_scale = 0.04
+        active_orientation_threshold = 0.03
+        active_yaw_threshold = 0.02
+        active_height_threshold = 0.02
         feet_position_tracking_sigma = 0.003
         # Ignore solver/contact jitter inside these radii. The wheel axle is
         # still position-held; meaningful support movement remains penalized.
@@ -159,7 +177,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         support_anchor_deadzone = 0.010
         # Intermediate tolerance: strong enough to learn crouch without making
         # a permanently folded stance more attractive than nominal standing.
-        height_tracking_sigma = 0.004
+        height_tracking_sigma = 0.0015
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
         height_crouch_range = 0.14
@@ -197,7 +215,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "728v1_bounded_std_height_reference"
+        run_name = "728v2_stage1_independent_command_tracking"
         save_interval = 500
         resume = False
         load_run = -1

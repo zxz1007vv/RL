@@ -134,27 +134,36 @@ class ZgwtDance(Zgwt):
             return
         roll, pitch = self._current_roll_pitch()
         height = self._current_base_height()
-        roll_error = torch.mean(
-            torch.abs(self.commands[env_ids, self.ROLL_COMMAND] - roll[env_ids])
+        roll_abs_error = torch.abs(
+            self.commands[env_ids, self.ROLL_COMMAND] - roll[env_ids]
         )
-        pitch_error = torch.mean(
-            torch.abs(self.commands[env_ids, self.PITCH_COMMAND] - pitch[env_ids])
+        pitch_abs_error = torch.abs(
+            self.commands[env_ids, self.PITCH_COMMAND] - pitch[env_ids]
         )
+        roll_error = torch.mean(roll_abs_error)
+        pitch_error = torch.mean(pitch_abs_error)
+        roll_active = (
+            torch.abs(self.pose_command_targets[env_ids, 0])
+            >= self.cfg.rewards.active_orientation_threshold
+        ).float()
+        pitch_active = (
+            torch.abs(self.pose_command_targets[env_ids, 1])
+            >= self.cfg.rewards.active_orientation_threshold
+        ).float()
+        roll_active_error = self._masked_mean(roll_abs_error, roll_active)
+        pitch_active_error = self._masked_mean(pitch_abs_error, pitch_active)
         height_abs_error = torch.abs(
             self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids]
         )
         height_error = torch.mean(height_abs_error)
         height_active = (
             torch.abs(
-                self.commands[env_ids, self.HEIGHT_COMMAND]
+                self.pose_command_targets[env_ids, 2]
                 - self.cfg.rewards.default_body_height
             )
-            >= 0.02
+            >= self.cfg.rewards.active_height_threshold
         ).float()
-        height_active_count = torch.clamp(torch.sum(height_active), min=1.0)
-        height_active_error = torch.sum(
-            height_abs_error * height_active
-        ) / height_active_count
+        height_active_error = self._masked_mean(height_abs_error, height_active)
         # default_dof_pos has shape [1, num_dof] and is shared by every env;
         # indexing it with env_ids > 0 triggers a delayed CUDA device assert.
         joint_error = self.dof_pos[env_ids] - self.default_dof_pos
@@ -193,7 +202,13 @@ class ZgwtDance(Zgwt):
         common_knee_flexion = torch.sum(
             torch.abs(torch.mean(knee_flexion, dim=1)) * default_height_weight
         ) / default_height_count
-        yaw_error = torch.mean(torch.abs(self._body_yaw_error()[env_ids]))
+        yaw_abs_error = torch.abs(self._body_yaw_error()[env_ids])
+        yaw_error = torch.mean(yaw_abs_error)
+        yaw_command_active = (
+            torch.abs(self.yaw_command_targets[env_ids])
+            >= self.cfg.rewards.active_yaw_threshold
+        ).float()
+        yaw_active_error = self._masked_mean(yaw_abs_error, yaw_command_active)
         xy_drift = torch.mean(
             torch.norm(
                 self.root_states[env_ids, :2] - self.episode_start_xy[env_ids], dim=1
@@ -242,6 +257,16 @@ class ZgwtDance(Zgwt):
         # Dance-specific diagnostics for TensorBoard.
         self.extras["episode"]["mean_abs_roll_error"] = roll_error
         self.extras["episode"]["mean_abs_pitch_error"] = pitch_error
+        self.extras["episode"]["mean_abs_roll_error_active"] = roll_active_error
+        self.extras["episode"]["mean_abs_pitch_error_active"] = (
+            pitch_active_error
+        )
+        self.extras["episode"]["mean_roll_active_fraction"] = torch.mean(
+            roll_active
+        )
+        self.extras["episode"]["mean_pitch_active_fraction"] = torch.mean(
+            pitch_active
+        )
         self.extras["episode"]["mean_abs_height_error"] = height_error
         self.extras["episode"]["mean_abs_height_error_active"] = (
             height_active_error
@@ -259,6 +284,10 @@ class ZgwtDance(Zgwt):
         )
         # Override the base class' yaw-rate diagnostic: slot 2 is a body-yaw angle.
         self.extras["episode"]["mean_abs_yaw_error"] = yaw_error
+        self.extras["episode"]["mean_abs_yaw_error_active"] = yaw_active_error
+        self.extras["episode"]["mean_yaw_active_fraction"] = torch.mean(
+            yaw_command_active
+        )
         self.extras["episode"]["mean_xy_drift"] = xy_drift
         self.extras["episode"]["mean_support_xy_drift"] = support_xy_drift
         self.extras["episode"]["mean_feet_xy_drift"] = feet_xy_drift
@@ -524,6 +553,21 @@ class ZgwtDance(Zgwt):
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
         )
 
+    @staticmethod
+    def _masked_mean(values, mask):
+        """Mean over an active command subset, safe when a batch has none."""
+        return torch.sum(values * mask) / torch.clamp(torch.sum(mask), min=1.0)
+
+    def _command_tracking_weight(self, target_magnitude, full_scale):
+        """Prioritize active commands while weakly holding inactive axes."""
+        active_weight = torch.clamp(
+            torch.abs(target_magnitude) / float(full_scale), min=0.0, max=1.0
+        )
+        inactive_weight = float(
+            self.cfg.rewards.inactive_command_tracking_weight
+        )
+        return inactive_weight + (1.0 - inactive_weight) * active_weight
+
     def _reward_tracking_body_orientation(self):
         error = torch.sum(
             torch.square(self.projected_gravity - self._target_projected_gravity()),
@@ -531,15 +575,55 @@ class ZgwtDance(Zgwt):
         )
         return torch.exp(-error / self.cfg.rewards.orientation_tracking_sigma)
 
+    def _reward_tracking_body_roll(self):
+        roll, _ = self._current_roll_pitch()
+        error = torch.square(
+            roll - self.commands[:, self.ROLL_COMMAND]
+        )
+        weight = self._command_tracking_weight(
+            self.pose_command_targets[:, 0],
+            self.cfg.rewards.roll_tracking_full_scale,
+        )
+        return weight * torch.exp(
+            -error / self.cfg.rewards.roll_tracking_sigma
+        )
+
+    def _reward_tracking_body_pitch(self):
+        _, pitch = self._current_roll_pitch()
+        error = torch.square(
+            pitch - self.commands[:, self.PITCH_COMMAND]
+        )
+        weight = self._command_tracking_weight(
+            self.pose_command_targets[:, 1],
+            self.cfg.rewards.pitch_tracking_full_scale,
+        )
+        return weight * torch.exp(
+            -error / self.cfg.rewards.pitch_tracking_sigma
+        )
+
     def _reward_tracking_body_yaw(self):
         error = torch.square(self._body_yaw_error())
-        return torch.exp(-error / self.cfg.rewards.yaw_tracking_sigma)
+        weight = self._command_tracking_weight(
+            self.yaw_command_targets,
+            self.cfg.rewards.yaw_tracking_full_scale,
+        )
+        return weight * torch.exp(-error / self.cfg.rewards.yaw_tracking_sigma)
 
     def _reward_tracking_body_height(self):
         error = torch.square(
             self._current_base_height() - self.commands[:, self.HEIGHT_COMMAND]
         )
-        return torch.exp(-error / self.cfg.rewards.height_tracking_sigma)
+        height_target_offset = (
+            self.pose_command_targets[:, 2]
+            - self.cfg.rewards.default_body_height
+        )
+        weight = self._command_tracking_weight(
+            height_target_offset,
+            self.cfg.rewards.height_tracking_full_scale,
+        )
+        return weight * torch.exp(
+            -error / self.cfg.rewards.height_tracking_sigma
+        )
 
     def _reward_base_position_drift(self):
         return torch.sum(

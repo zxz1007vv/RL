@@ -46,10 +46,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         curriculum_time = 2400.0
         # Explicit probabilities for:
         # neutral, yaw, height, roll, pitch, roll+pitch, pose, all axes.
-        # The old neutral mask left only about 21% of episodes with a
-        # non-default height. Height is now active in 38% of episodes while a
-        # quarter of the environments still teaches a clean symmetric stance.
-        mode_probabilities = [0.25, 0.10, 0.25, 0.10, 0.10, 0.07, 0.08, 0.05]
+        # Height is active in 32% of episodes. Keep 30% neutral samples so the
+        # policy cannot trade away its deploy-time entry posture for crouching.
+        mode_probabilities = [0.30, 0.10, 0.20, 0.10, 0.10, 0.08, 0.07, 0.05]
         command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
 
         class ranges:
@@ -108,7 +107,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # 跟踪
             tracking_body_orientation = 6.0   #roll pitch  4.0
             tracking_body_yaw = 3.0
-            tracking_body_height = 5.0
+            tracking_body_height = 4.0
             tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
             tracking_lin_vy = 1.5
             tracking_ang_vel = 0.0
@@ -135,6 +134,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             feet_vertical_motion = -0.1
             action_rate = -0.005
             action_smoothness = -0.0025
+            leg_action_magnitude = -0.02
             torque_rate = -5.0e-7
             torques = -8.0e-6
             dof_vel = -1.0e-7
@@ -144,7 +144,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             neutral_joint_pose = -1.5
             lateral_leg_symmetry = -2.0
             lateral_foot_alignment = -1.5
-            height_leg_coordination = -2.0
+            height_leg_coordination = -5.0
             pitch_leg_coordination = -2.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
@@ -157,12 +157,15 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # still position-held; meaningful support movement remains penalized.
         feet_anchor_deadzone = 0.015
         support_anchor_deadzone = 0.010
-        # This reward uses squared height error. sigma=0.01 still retained 78%
-        # of the bonus at 5 cm error, which let the policy ignore crouch.
-        height_tracking_sigma = 0.0025
+        # Intermediate tolerance: strong enough to learn crouch without making
+        # a permanently folded stance more attractive than nominal standing.
+        height_tracking_sigma = 0.004
         neutral_orientation_sigma = 0.01
         neutral_height_sigma = 0.0025
-        height_coordination_full_scale = 0.05
+        height_crouch_range = 0.14
+        height_crouch_hip_target = 0.20
+        height_crouch_knee_target = 0.40
+        height_extension_fraction_limit = 0.10
         height_coordination_orientation_sigma = 0.0025
         pitch_coordination_full_scale = 0.10
         pitch_coordination_other_axis_sigma = 0.0025
@@ -177,7 +180,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
 class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
     class policy(ZGWTRoughCfgPPO.policy):
-        init_noise_std = 0.25
+        init_noise_std = 0.15
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
         learning_rate = 1.0e-4
@@ -185,14 +188,17 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # the failed run, after which value loss jumped above 1e3.
         schedule = "fixed"
         desired_kl = 0.01
-        entropy_coef = 0.001
+        entropy_coef = 0.0
+        min_action_std = 0.05
+        max_action_std = 0.25
         clip_param = 0.15
         max_grad_norm = 0.5
         num_learning_epochs = 3
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "727v2_height_structured_pose"
+        run_name = "728v1_bounded_std_height_reference"
+        save_interval = 500
         resume = False
         load_run = -1
         checkpoint = -1

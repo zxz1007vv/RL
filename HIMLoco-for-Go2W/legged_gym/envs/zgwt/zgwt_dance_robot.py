@@ -78,6 +78,9 @@ class ZgwtDance(Zgwt):
             dtype=torch.long,
             device=self.device,
         )
+        self.leg_joint_indices = torch.cat(
+            (self.leg_abad_indices, self.leg_hip_indices, self.leg_knee_indices)
+        )
         # Convert front/rear joint signs into one common positive crouch axis.
         self.crouch_hip_sign = torch.tensor(
             [-1.0, -1.0, 1.0, 1.0], device=self.device
@@ -152,7 +155,9 @@ class ZgwtDance(Zgwt):
         height_active_error = torch.sum(
             height_abs_error * height_active
         ) / height_active_count
-        joint_error = self.dof_pos[env_ids] - self.default_dof_pos[env_ids]
+        # default_dof_pos has shape [1, num_dof] and is shared by every env;
+        # indexing it with env_ids > 0 triggers a delayed CUDA device assert.
+        joint_error = self.dof_pos[env_ids] - self.default_dof_pos
         lateral_pair_error = torch.mean(
             torch.abs(
                 joint_error[:, self.neutral_pair_a_indices]
@@ -166,6 +171,28 @@ class ZgwtDance(Zgwt):
             )
             * neutral_weight
         ) / torch.clamp(torch.sum(neutral_weight), min=1.0)
+        hip_flexion = (
+            joint_error[:, self.leg_hip_indices] * self.crouch_hip_sign
+        )
+        knee_flexion = (
+            joint_error[:, self.leg_knee_indices] * self.crouch_knee_sign
+        )
+        default_height_weight = torch.exp(
+            -torch.square(
+                self.commands[env_ids, self.HEIGHT_COMMAND]
+                - self.cfg.rewards.default_body_height
+            )
+            / self.cfg.rewards.neutral_height_sigma
+        )
+        default_height_count = torch.clamp(
+            torch.sum(default_height_weight), min=1.0
+        )
+        common_hip_flexion = torch.sum(
+            torch.abs(torch.mean(hip_flexion, dim=1)) * default_height_weight
+        ) / default_height_count
+        common_knee_flexion = torch.sum(
+            torch.abs(torch.mean(knee_flexion, dim=1)) * default_height_weight
+        ) / default_height_count
         yaw_error = torch.mean(torch.abs(self._body_yaw_error()[env_ids]))
         xy_drift = torch.mean(
             torch.norm(
@@ -224,6 +251,12 @@ class ZgwtDance(Zgwt):
         )
         self.extras["episode"]["mean_lateral_pair_error"] = lateral_pair_error
         self.extras["episode"]["mean_neutral_abad_error"] = neutral_abad_error
+        self.extras["episode"]["mean_default_height_common_hip_flexion"] = (
+            common_hip_flexion
+        )
+        self.extras["episode"]["mean_default_height_common_knee_flexion"] = (
+            common_knee_flexion
+        )
         # Override the base class' yaw-rate diagnostic: slot 2 is a body-yaw angle.
         self.extras["episode"]["mean_abs_yaw_error"] = yaw_error
         self.extras["episode"]["mean_xy_drift"] = xy_drift
@@ -647,21 +680,27 @@ class ZgwtDance(Zgwt):
         ) * yaw_gate
 
     def _reward_height_leg_coordination(self):
-        """Teach height-only commands as a clean four-leg crouch.
+        """Match the common leg flexion to a continuous height reference.
 
-        Height tracking alone allowed the actor to respond through one ABAD
-        joint. For an isolated crouch, keep ABAD near nominal and make all four
-        hip/knee flexions agree after accounting for rear-leg sign convention.
-        The orientation gate disables this prior when roll, pitch, or yaw
-        legitimately requires unequal leg lengths.
+        The previous variance-only term allowed all four legs to remain equally
+        folded at the nominal 0.54 m command. The common component is now
+        constrained for every pose, while the individual-leg shape prior is
+        enabled only when roll, pitch, and yaw are near zero.
         """
-        height_error = torch.abs(
-            self.commands[:, self.HEIGHT_COMMAND]
-            - self.cfg.rewards.default_body_height
-        )
-        height_weight = torch.clamp(
-            height_error / self.cfg.rewards.height_coordination_full_scale,
+        crouch_fraction = (
+            self.cfg.rewards.default_body_height
+            - self.commands[:, self.HEIGHT_COMMAND]
+        ) / self.cfg.rewards.height_crouch_range
+        crouch_fraction = torch.clamp(
+            crouch_fraction,
+            min=-self.cfg.rewards.height_extension_fraction_limit,
             max=1.0,
+        )
+        target_hip_flexion = (
+            crouch_fraction * self.cfg.rewards.height_crouch_hip_target
+        )
+        target_knee_flexion = (
+            crouch_fraction * self.cfg.rewards.height_crouch_knee_target
         )
         orientation_error = (
             torch.square(self.commands[:, self.ROLL_COMMAND])
@@ -681,12 +720,36 @@ class ZgwtDance(Zgwt):
         knee_flexion = (
             joint_error[:, self.leg_knee_indices] * self.crouch_knee_sign
         )
-        coordination_error = (
-            torch.mean(torch.square(abad_error), dim=1)
-            + torch.var(hip_flexion, dim=1, unbiased=False)
-            + torch.var(knee_flexion, dim=1, unbiased=False)
+        common_error = (
+            torch.square(
+                torch.mean(hip_flexion, dim=1) - target_hip_flexion
+            )
+            + torch.square(
+                torch.mean(knee_flexion, dim=1) - target_knee_flexion
+            )
         )
-        return height_weight * orientation_gate * coordination_error
+        isolated_shape_error = (
+            torch.mean(torch.square(abad_error), dim=1)
+            + torch.mean(
+                torch.square(
+                    hip_flexion - target_hip_flexion.unsqueeze(1)
+                ),
+                dim=1,
+            )
+            + torch.mean(
+                torch.square(
+                    knee_flexion - target_knee_flexion.unsqueeze(1)
+                ),
+                dim=1,
+            )
+        )
+        return common_error + orientation_gate * isolated_shape_error
+
+    def _reward_leg_action_magnitude(self):
+        """Prevent a static saturated leg command from evading action-rate cost."""
+        return torch.sum(
+            torch.square(self.actions[:, self.leg_joint_indices]), dim=1
+        )
 
     def _reward_pitch_leg_coordination(self):
         """Keep pure pitch in the sagittal plane with paired front/rear legs."""

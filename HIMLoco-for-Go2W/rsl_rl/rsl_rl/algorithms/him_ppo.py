@@ -51,6 +51,8 @@ class HIMPPO:
                  use_clipped_value_loss=True,
                  schedule="fixed",
                  desired_kl=0.01,
+                 min_action_std=None,
+                 max_action_std=None,
                  device='cpu',
                  ):
 
@@ -59,6 +61,8 @@ class HIMPPO:
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
+        self.min_action_std = min_action_std
+        self.max_action_std = max_action_std
 
         # PPO components
         self.actor_critic = actor_critic
@@ -89,6 +93,7 @@ class HIMPPO:
 
     def act(self, obs, critic_obs):
         # Compute the actions and values
+        self._clamp_action_std()
         self.transition.actions = self.actor_critic.act(obs).detach()
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
@@ -176,6 +181,7 @@ class HIMPPO:
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+                self._clamp_action_std()
 
                 mean_value_loss += value_loss.item()
                 mean_surrogate_loss += surrogate_loss.item()
@@ -190,3 +196,13 @@ class HIMPPO:
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, estimation_loss, swap_loss
+
+    def _clamp_action_std(self):
+        """Bound exploration without changing behavior of tasks that omit limits."""
+        if self.min_action_std is None and self.max_action_std is None:
+            return
+        with torch.no_grad():
+            self.actor_critic.std.clamp_(
+                min=self.min_action_std,
+                max=self.max_action_std,
+            )

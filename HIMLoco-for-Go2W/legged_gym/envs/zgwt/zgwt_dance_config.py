@@ -44,13 +44,23 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         yaw_slew_rate = 0.30
         # Give the wider/faster command set enough time to unfold smoothly.
         curriculum_time = 2400.0
-        # Explicit probabilities for:
-        # neutral, yaw, height, roll, pitch, roll+pitch, pose, all axes.
-        # Stage 1 emphasizes isolated command tracking. Active fractions are:
-        # yaw 25%, height 35%, roll 28%, pitch 37%. Fifteen percent neutral
-        # samples still preserve a clean deploy-time entry posture.
-        mode_probabilities = [0.15, 0.20, 0.20, 0.08, 0.17, 0.05, 0.10, 0.05]
-        command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
+        # Stage 1 matches the usual joystick operation: height is isolated while
+        # roll/pitch/yaw can mix. Stage 2 adds the short mixed states produced by
+        # joystick filtering and command hand-over. Both lists use this order:
+        # neutral, H, R, P, Y, RP, RY, PY, RPY,
+        # HR, HP, HY, HRP, HRY, HPY, HRPY.
+        initial_mode_probabilities = [
+            0.15, 0.20, 0.10, 0.10, 0.15, 0.10, 0.075, 0.075, 0.05,
+            0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+        ]
+        final_mode_probabilities = [
+            0.10, 0.10, 0.08, 0.08, 0.08, 0.07, 0.07, 0.07, 0.10,
+            0.04, 0.04, 0.04, 0.03, 0.03, 0.03, 0.04,
+        ]
+        mixed_height_curriculum_start = 0.35
+        mixed_height_curriculum_end = 0.75
+        # Height is normalized by max(|0.40-0.54|, |0.55-0.54|)=0.14 m.
+        command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 7.142857]
 
         class ranges:
             # Linear velocity remains zero. body_yaw is a bounded angle relative
@@ -105,92 +115,60 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
-            # Independent command tracking. Each term is internally weighted so
-            # active commands dominate while inactive axes retain a weak hold.
-            tracking_body_orientation = 0.0
-            tracking_body_roll = 5.0
-            tracking_body_pitch = 8.0
-            tracking_body_yaw = 8.0
-            tracking_body_height = 8.0
-            tracking_lin_vx = 1.5  #命令设置为0，跟踪奖励高反而不动
-            tracking_lin_vy = 1.5
-            tracking_ang_vel = 0.0
+            # Roll and pitch share one target-gravity reward. This avoids a
+            # second "stay level" objective fighting the commanded body pose.
+            tracking_body_orientation = 11.0
+            tracking_body_yaw = 6.0
+            tracking_body_height = 6.0
+            # Hold objectives are gated by command-tracking convergence. Support
+            # centre has priority over exact individual wheel-centre anchoring.
+            tracking_lin_vx = 3.0
+            tracking_lin_vy = 3.0
+            tracking_support_position = 3.0
+            tracking_feet_position = 1.0
+            tracking_max_foot_position = 0.5
 
-            # 固定支撑点位置
-            base_position_drift = 0.0
-            tracking_feet_position = 2.0
-            support_center_drift = -15.0
-            feet_position_drift = -20.0
-            max_foot_position_drift = -25.0
-            base_linear_motion = -2.5
-            body_yaw_in_place = -10.0
-            yaw_rate = -0.20
-            feet_horizontal_motion = -0.5
-            feet_air_horizontal_motion = -0.25
-            base_stand_still = -2.0
-            wheel_stand_still = -0.5
-            wheel_vel_stand_still = -2.0e-3
-
-            # 稳定性
+            # Minimal stability, smoothness, and safety terms.
+            yaw_rate = -0.05
             collision = -1.0
-            feet_contact = -1.0  #-0.6
+            feet_contact = -1.0
             feet_stumble = -0.1
             feet_vertical_motion = -0.1
-            action_rate = -0.005
-            action_smoothness = -0.0025
-            leg_action_magnitude = -0.02
-            torque_rate = -5.0e-7
+            action_rate = -0.01
+            action_smoothness = -0.005
             torques = -8.0e-6
-            dof_vel = -1.0e-7
-            dof_acc = -1.0e-8
-
-            # 姿态对称性和关节限制
-            neutral_joint_pose = -1.5
-            lateral_leg_symmetry = -2.0
-            lateral_foot_alignment = -1.5
-            height_leg_coordination = -5.0
-            pitch_leg_coordination = -2.0
+            neutral_joint_pose = -3.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
 
         only_positive_rewards = False
-        #reward = exp(-(实际值 - 命令值)² / sigma)
 
-        roll_tracking_sigma = 0.025
-        pitch_tracking_sigma = 0.020
-        yaw_tracking_sigma = 0.005
-        # Inactive axes receive only this fraction of their tracking reward.
-        # This preserves neutral-axis stability without letting zero commands
-        # dominate the policy gradient and TensorBoard reward.
-        inactive_command_tracking_weight = 0.10
-        roll_tracking_full_scale = 0.08
-        pitch_tracking_full_scale = 0.08
-        yaw_tracking_full_scale = 0.04
-        height_tracking_full_scale = 0.04
+        # First track the commanded body pose, then tighten stationary support
+        # as tracking converges. Safety/smoothness costs use a floored multiplier.
+        task_reward_scale = 28.0
+        hold_gate_sigma = 0.50
+        auxiliary_reward_sigma = 0.10
+        auxiliary_reward_floor = 0.30
+
+        # reward = exp(-error / sigma). Orientation error is measured between
+        # actual and commanded projected gravity, not against a level body.
+        orientation_tracking_sigma = 0.012
+        yaw_tracking_sigma = 0.0025
+        height_tracking_sigma = 0.0008
+
+        # Used only by diagnostics and the explicitly neutral-task gate.
         active_orientation_threshold = 0.03
         active_yaw_threshold = 0.02
         active_height_threshold = 0.02
+
+        # Soft support deadzones retain contact-solver tolerance. Wheel axle
+        # position-hold remains enabled independently in the controller.
         feet_position_tracking_sigma = 0.003
-        # Ignore solver/contact jitter inside these radii. The wheel axle is
-        # still position-held; meaningful support movement remains penalized.
+        support_position_tracking_sigma = 0.001
+        max_foot_position_tracking_sigma = 0.001
         feet_anchor_deadzone = 0.015
         support_anchor_deadzone = 0.010
-        # Intermediate tolerance: strong enough to learn crouch without making
-        # a permanently folded stance more attractive than nominal standing.
-        height_tracking_sigma = 0.0015
-        neutral_orientation_sigma = 0.01
-        neutral_height_sigma = 0.0025
-        height_crouch_range = 0.14
-        height_crouch_hip_target = 0.20
-        height_crouch_knee_target = 0.40
-        height_extension_fraction_limit = 0.10
-        height_coordination_orientation_sigma = 0.0025
-        pitch_coordination_full_scale = 0.10
-        pitch_coordination_other_axis_sigma = 0.0025
-        lateral_symmetry_roll_allowance = 2.0
-        lateral_symmetry_yaw_allowance = 0.75
-        yaw_symmetry_gate_sigma = 0.01
-        body_yaw_in_place_full_scale = 0.05
+
         default_body_height = 0.54
         termination_tilt = 0.55
         termination_min_height = 0.32
@@ -215,7 +193,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "728v2_stage1_independent_command_tracking"
+        run_name = "729v3_two_stage_height_mix_gated_hold"
         save_interval = 500
         resume = False
         load_run = -1

@@ -769,7 +769,10 @@ class LeggedRobot(BaseTask):
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         if self.cfg.terrain.measure_heights:
             self.height_points = self._init_height_points()
-        self.measured_heights = self._get_heights()
+            self.measured_heights = self._get_heights()
+        else:
+            # Plane/blind tasks must not construct or access the 187-point scan.
+            self.measured_heights = None
         self.base_height_points = self._init_base_height_points()
 
         # joint positions offsets and PD gains

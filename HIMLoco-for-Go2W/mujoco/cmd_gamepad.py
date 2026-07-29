@@ -59,7 +59,8 @@ class CmdGenerator:
         self.height_center = float(cfg.get("height_center", 0.54))
         self.height_range = float(cfg.get("height_range", 0.08))
         self.min_height = float(cfg.get("min_height", 0.40))
-        self.max_height = float(cfg.get("max_height", 0.58))
+        # Dance height is crouch-only unless a config explicitly opts out.
+        self.max_height = float(cfg.get("max_height", self.height_center))
         self.roll_sign = float(cfg.get("roll_sign", -1.0))
         self.pitch_sign = float(cfg.get("pitch_sign", -1.0))
         self.height_sign = float(cfg.get("height_sign", -1.0))

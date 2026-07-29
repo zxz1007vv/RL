@@ -126,6 +126,10 @@ class HIMPPO:
         mean_surrogate_loss = 0
         mean_estimation_loss = 0
         mean_swap_loss = 0
+        mean_approx_kl = 0
+        mean_clip_fraction = 0
+        mean_explained_variance = 0
+        mean_gradient_norm = 0
         
         generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
 
@@ -139,13 +143,22 @@ class HIMPPO:
                 sigma_batch = self.actor_critic.action_std
                 entropy_batch = self.actor_critic.entropy
 
-                # KL
+                # Always measure KL. desired_kl only changes LR in adaptive mode;
+                # fixed scheduling deliberately does not early-stop epochs.
+                with torch.inference_mode():
+                    kl = torch.sum(
+                        torch.log(sigma_batch / old_sigma_batch + 1.e-5)
+                        + (
+                            torch.square(old_sigma_batch)
+                            + torch.square(old_mu_batch - mu_batch)
+                        )
+                        / (2.0 * torch.square(sigma_batch))
+                        - 0.5,
+                        axis=-1,
+                    )
+                    kl_mean = torch.mean(kl)
                 if self.desired_kl != None and self.schedule == 'adaptive':
                     with torch.inference_mode():
-                        kl = torch.sum(
-                            torch.log(sigma_batch / old_sigma_batch + 1.e-5) + (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch)) / (2.0 * torch.square(sigma_batch)) - 0.5, axis=-1)
-                        kl_mean = torch.mean(kl)
-
                         if kl_mean > self.desired_kl * 2.0:
                             self.learning_rate = max(1e-5, self.learning_rate / 1.5)
                         elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
@@ -159,6 +172,9 @@ class HIMPPO:
 
                 # Surrogate loss
                 ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
+                clip_fraction = torch.mean(
+                    (torch.abs(ratio - 1.0) > self.clip_param).float()
+                )
                 surrogate = -torch.squeeze(advantages_batch) * ratio
                 surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(ratio, 1.0 - self.clip_param,
                                                                                 1.0 + self.clip_param)
@@ -179,7 +195,9 @@ class HIMPPO:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                gradient_norm = nn.utils.clip_grad_norm_(
+                    self.actor_critic.parameters(), self.max_grad_norm
+                )
                 self.optimizer.step()
                 self._clamp_action_std()
 
@@ -187,15 +205,36 @@ class HIMPPO:
                 mean_surrogate_loss += surrogate_loss.item()
                 mean_estimation_loss += estimation_loss
                 mean_swap_loss += swap_loss
+                mean_approx_kl += kl_mean.item()
+                mean_clip_fraction += clip_fraction.item()
+                returns_variance = torch.var(returns_batch, unbiased=False)
+                explained_variance = 1.0 - torch.var(
+                    returns_batch - value_batch.detach(), unbiased=False
+                ) / torch.clamp(returns_variance, min=1.0e-8)
+                mean_explained_variance += explained_variance.item()
+                mean_gradient_norm += gradient_norm.item()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_estimation_loss /= num_updates
         mean_swap_loss /= num_updates
+        mean_approx_kl /= num_updates
+        mean_clip_fraction /= num_updates
+        mean_explained_variance /= num_updates
+        mean_gradient_norm /= num_updates
         self.storage.clear()
 
-        return mean_value_loss, mean_surrogate_loss, estimation_loss, swap_loss
+        return (
+            mean_value_loss,
+            mean_surrogate_loss,
+            mean_estimation_loss,
+            mean_swap_loss,
+            mean_approx_kl,
+            mean_clip_fraction,
+            mean_explained_variance,
+            mean_gradient_norm,
+        )
 
     def _clamp_action_std(self):
         """Bound exploration without changing behavior of tasks that omit limits."""

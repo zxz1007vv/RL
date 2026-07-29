@@ -145,8 +145,13 @@ wheel_park_stiffness = float(cfg.get("wheel_park_stiffness", 0.0))
 park_wheels_always = bool(cfg.get("park_wheels_always", False))
 rl_entry_blend_time = max(0.0, float(cfg.get("rl_entry_blend_time", 0.0)))
 commands_cfg = cfg.get("commands", {})
-pose_transition_time = max(
-    0.0, float(commands_cfg.get("transition_time", 0.0))
+command_filter_time_constant = max(
+    0.0,
+    float(
+        commands_cfg.get(
+            "filter_time_constant", commands_cfg.get("transition_time", 0.0)
+        )
+    ),
 )
 yaw_slew_rate = max(0.0, float(commands_cfg.get("yaw_slew_rate", 0.0)))
 command_mode = commands_cfg.get("mode", "heading")
@@ -156,7 +161,6 @@ policy_command_names = commands_cfg.get(
     "policy_order", ["lin_vel_x", "lin_vel_y", "ang_vel_yaw"]
 )
 pose_defaults = commands_cfg.get("pose_defaults", {})
-dance_trajectory = commands_cfg.get("dance_trajectory", {})
 yaw_kp = commands_cfg.get("yaw_kp", cfg.get("yaw_kp", 2.5))
 
 scale_factors = cfg["scale_factors"]
@@ -212,9 +216,6 @@ def get_obs(actions, default_dof_pos, commands):
     default_command_scales = [
         sf["scale_lin_vel"], sf["scale_lin_vel"], sf["scale_ang_vel"]
     ]
-    commands_scale = torch.tensor(
-        commands_cfg.get("scales", default_command_scales), device=device
-    )
     base_quat = get_sensor_data("imu_quat")
     projected_gravity = world2self(base_quat, torch.tensor([0., 0., -1.], device=device))
     imu_gyro = get_sensor_data("imu_gyro")
@@ -231,13 +232,37 @@ def get_obs(actions, default_dof_pos, commands):
         dof_vel[i] = get_sensor_data(n + "_vel")[0]
 
     cmds = torch.tensor(commands, device=device)
+    normalization = commands_cfg.get("normalization")
+    if normalization is not None and len(commands) == 6:
+        normalized_commands = torch.zeros_like(cmds)
+        normalized_commands[2] = torch.clamp(
+            cmds[2] / float(normalization["max_abs_yaw"]), -1.0, 1.0
+        )
+        normalized_commands[3] = torch.clamp(
+            cmds[3] / float(normalization["max_abs_roll"]), -1.0, 1.0
+        )
+        normalized_commands[4] = torch.clamp(
+            cmds[4] / float(normalization["max_abs_pitch"]), -1.0, 1.0
+        )
+        default_height = float(normalization["default_height"])
+        crouch_span = default_height - float(normalization["min_height"])
+        normalized_commands[5] = torch.clamp(
+            (cmds[5] - default_height) / crouch_span, -1.0, 0.0
+        )
+    else:
+        commands_scale = torch.tensor(
+            commands_cfg.get("scales", default_command_scales), device=device
+        )
+        normalized_commands = cmds * commands_scale
+    effective_actions = actions.clone()
+    effective_actions[wheel_ids] = 0.0
     return torch.cat([
         imu_gyro * sf["scale_ang_vel"],
         projected_gravity,
-        cmds * commands_scale,
+        normalized_commands,
         (dof_pos - default_dof_pos) * sf["scale_dof_pos"],
         dof_vel * sf["scale_dof_vel"],
-        actions
+        effective_actions
     ], dim=-1)
 
 def clamp_command(value, name):
@@ -303,8 +328,6 @@ def main():
     pd_target_dof_pos = pd_hold_dof_pos.clone()
     pd_transition_start = None
     pd_transition_elapsed = 0.0 if startup_enabled else pd_transition_time
-    trajectory_start_time = time.time()
-
     # load policy
     try:
         policy = torch.jit.load(paths["policy_path"])
@@ -484,20 +507,6 @@ def main():
             # rl control
             if control_mode == 2:
                 raw_commands = get_cmd()
-                if dance_trajectory.get("enabled", False) and len(policy_command_names) >= 6:
-                    elapsed = time.time() - trajectory_start_time
-                    frequency = float(dance_trajectory.get("frequency", 0.25))
-                    phase = 2.0 * np.pi * frequency * elapsed
-                    raw_commands = [
-                        raw_commands[0],
-                        raw_commands[1],
-                        float(dance_trajectory.get("yaw_amplitude", 0.10))
-                        * np.sin(phase),
-                        float(dance_trajectory.get("roll_amplitude", 0.15)) * np.sin(phase),
-                        float(dance_trajectory.get("pitch_amplitude", 0.12)) * np.sin(phase + np.pi / 2.0),
-                        float(dance_trajectory.get("height_center", 0.52))
-                        + float(dance_trajectory.get("height_amplitude", 0.06)) * np.sin(phase * 0.5),
-                    ]
                 commands, yaw_now = prepare_commands(raw_commands)
                 if len(commands) >= 6:
                     yaw_target = torch.tensor(
@@ -506,9 +515,11 @@ def main():
                     pose_target = torch.tensor(
                         commands[3:6], dtype=torch.float32, device=device
                     )
-                    if pose_transition_time > 0.0:
+                    if command_filter_time_constant > 0.0:
                         control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
-                        alpha = min(control_dt / pose_transition_time, 1.0)
+                        alpha = 1.0 - np.exp(
+                            -control_dt / command_filter_time_constant
+                        )
                         pose_command_state[:] = torch.lerp(
                             pose_command_state, pose_target, alpha
                         )
@@ -611,6 +622,7 @@ def main():
                 else:
                     blend = 1.0
                 actions = policy_actions * blend
+                actions[wheel_ids] = 0.0
                 rl_entry_elapsed += m.opt.timestep * cfg["sim_steps_per_loop"]
                 actions_scaled = actions * actions_scale
                 if wheel_control == "torque":

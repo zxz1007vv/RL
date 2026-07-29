@@ -139,7 +139,16 @@ class HIMOnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
                 
-            mean_value_loss, mean_surrogate_loss, mean_estimation_loss, mean_swap_loss = self.alg.update()
+            (
+                mean_value_loss,
+                mean_surrogate_loss,
+                mean_estimation_loss,
+                mean_swap_loss,
+                mean_approx_kl,
+                mean_clip_fraction,
+                mean_explained_variance,
+                mean_gradient_norm,
+            ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
@@ -178,6 +187,10 @@ class HIMOnPolicyRunner:
         self.writer.add_scalar('Loss/Estimation Loss', locs['mean_estimation_loss'], locs['it'])
         self.writer.add_scalar('Loss/Swap Loss', locs['mean_swap_loss'], locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
+        self.writer.add_scalar('Loss/approx_kl', locs['mean_approx_kl'], locs['it'])
+        self.writer.add_scalar('Loss/clip_fraction', locs['mean_clip_fraction'], locs['it'])
+        self.writer.add_scalar('Loss/explained_variance', locs['mean_explained_variance'], locs['it'])
+        self.writer.add_scalar('Loss/gradient_norm', locs['mean_gradient_norm'], locs['it'])
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
         self.writer.add_scalar('Perf/collection time', locs['collection_time'], locs['it'])
@@ -235,9 +248,33 @@ class HIMOnPolicyRunner:
             'infos': infos,
             }, path)
 
-    def load(self, path, load_optimizer=True):
+    def load(self, path, load_optimizer=None, actor_only=None):
         loaded_dict = torch.load(path)
-        self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
+        if actor_only is None:
+            actor_only = bool(self.cfg.get("load_actor_only", False))
+        if load_optimizer is None:
+            load_optimizer = bool(self.cfg.get("load_optimizer", True))
+        if actor_only:
+            transferable = {
+                key: value
+                for key, value in loaded_dict['model_state_dict'].items()
+                if not key.startswith("critic.")
+            }
+            incompatible = self.alg.actor_critic.load_state_dict(
+                transferable, strict=False
+            )
+            unexpected = [
+                key for key in incompatible.unexpected_keys
+                if not key.startswith("critic.")
+            ]
+            if unexpected:
+                raise RuntimeError(
+                    "unexpected actor-only checkpoint keys: "
+                    + ", ".join(unexpected)
+                )
+            load_optimizer = False
+        else:
+            self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
             self.alg.actor_critic.estimator.optimizer.load_state_dict(loaded_dict['estimator_optimizer_state_dict'])

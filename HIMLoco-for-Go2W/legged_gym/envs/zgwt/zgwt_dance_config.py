@@ -68,20 +68,20 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
 
-        # 当前启用：阶段 0（稳定站立）。
+        # 阶段 0 推荐值（稳定站立）：
+        # mode_probabilities = [
+        #     1.0,
+        #     0.0, 0.0, 0.0, 0.0,
+        #     0.0, 0.0, 0.0, 0.0,
+        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        # ]
+
+        # 当前启用：阶段 1（小范围单轴姿态）。
         mode_probabilities = [
-            1.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
+            0.30, 0.10, 0.15, 0.15, 0.15, 0.15,
+            0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
-
-        # 阶段 1 推荐值（小范围单轴姿态）：
-        # mode_probabilities = [
-        #     0.30, 0.10, 0.15, 0.15, 0.15, 0.15,
-        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        # ]
-        # ranges: yaw +/-0.025, roll/pitch +/-0.08, height 0.49~0.54。
 
         # 阶段 2 推荐值（完整姿态，height 不与姿态混合）：
         # mode_probabilities = [
@@ -104,17 +104,17 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # to the heading captured at episode reset, not a continuous turn rate.
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
-            # 当前启用：阶段 0（稳定站立）。
-            body_yaw = [0.0, 0.0]
-            body_roll = [0.0, 0.0]
-            body_pitch = [0.0, 0.0]
-            body_height = [0.54, 0.54]
+            # 阶段 0：
+            # body_yaw = [0.0, 0.0]
+            # body_roll = [0.0, 0.0]
+            # body_pitch = [0.0, 0.0]
+            # body_height = [0.54, 0.54]
 
-            # 阶段 1：
-            # body_yaw = [-0.025, 0.025]
-            # body_roll = [-0.08, 0.08]
-            # body_pitch = [-0.08, 0.08]
-            # body_height = [0.49, 0.54]
+            # 当前启用：阶段 1（小范围单轴姿态）。
+            body_yaw = [-0.025, 0.025]
+            body_roll = [-0.08, 0.08]
+            body_pitch = [-0.08, 0.08]
+            body_height = [0.49, 0.54]
 
             # 阶段 2、3、4：
             # body_yaw = [-0.10, 0.10]
@@ -254,7 +254,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "standv1"
+        run_name = "stage1v1"
         save_interval = 500
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
         # resume=True, load_actor_only=False, load_optimizer=True。
@@ -263,10 +263,10 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # 修改核心 reward、reward 尺度或 privileged observation：
         # resume=True, load_actor_only=True, load_optimizer=False。
         # 修改 actor observation 维度/顺序或 action 维度后，旧 actor 不兼容。
-        resume = False
+        resume = True
         # Use load_actor_only=True for checkpoints predating the 78-D critic
         # input or the refactored task reward. Actor/estimator shapes stay valid.
         load_actor_only = False
         load_optimizer = True
-        load_run = -1
-        checkpoint = -1
+        load_run = "Jul29_16-37-27_standv1"
+        checkpoint = 3000

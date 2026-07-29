@@ -23,13 +23,17 @@ wrap_to_pi = UTILS.wrap_to_pi
 
 class TestZGWTDanceMath(unittest.TestCase):
     @staticmethod
-    def _commands_config_node():
+    def _dance_config_node():
         path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_config.py"
         tree = ast.parse(path.read_text())
-        dance = next(
+        return next(
             node for node in tree.body
             if isinstance(node, ast.ClassDef) and node.name == "ZGWTDanceCfg"
         )
+
+    @classmethod
+    def _commands_config_node(cls):
+        dance = cls._dance_config_node()
         return next(
             node for node in dance.body
             if isinstance(node, ast.ClassDef) and node.name == "commands"
@@ -53,6 +57,34 @@ class TestZGWTDanceMath(unittest.TestCase):
             "stage_range_scales",
         }
         self.assertTrue(forbidden.isdisjoint(assignments))
+
+    def test_reward_scales_are_the_only_geometry_weights(self):
+        dance = self._dance_config_node()
+        rewards = next(
+            node for node in dance.body
+            if isinstance(node, ast.ClassDef) and node.name == "rewards"
+        )
+        reward_assignments = {
+            node.targets[0].id
+            for node in rewards.body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertNotIn("tracking_weights", reward_assignments)
+        self.assertNotIn("hold_weights", reward_assignments)
+
+        scales = next(
+            node for node in rewards.body
+            if isinstance(node, ast.ClassDef) and node.name == "scales"
+        )
+        scale_values = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in scales.body
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertEqual(scale_values["tracking_body_orientation"], 11.0)
+        self.assertEqual(scale_values["tracking_body_yaw"], 6.0)
+        self.assertEqual(scale_values["tracking_body_height"], 6.0)
+        self.assertEqual(scale_values["tracking_support_position"], 3.0)
 
     def test_fixed_network_shapes(self):
         one_step = 3 + 3 + 6 + 16 + 16 + 16

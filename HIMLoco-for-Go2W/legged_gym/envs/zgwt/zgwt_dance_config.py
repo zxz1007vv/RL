@@ -201,23 +201,12 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         auxiliary_reward_sigma = 0.10
         auxiliary_reward_floor = 0.30
 
-        # Geometry weights are intentionally separate from reward_scales,
-        # because the parent multiplies every reward scale by dt.
-        tracking_weights = {
-            "tracking_body_orientation": 0.50,
-            "tracking_body_yaw": 0.25,
-            "tracking_body_height": 0.25,
-        }
-        hold_weights = {
-            "tracking_lin_vx": 0.25,
-            "tracking_lin_vy": 0.25,
-            "tracking_support_position": 0.25,
-            "tracking_feet_position": 0.15,
-            "tracking_max_foot_position": 0.10,
-        }
-        # 足端漂移仍明显时，可小幅提高 support/feet hold 权重；同样每次
-        # 只改 1～2 项且不超过 20%～30%。核心 reward 结构或数值尺度若
-        # 发生大改，只加载 actor/estimator，并重置 critic 和 optimizer。
+        # scales 是 tracking、hold、soft 和 hard reward 的唯一权重来源。
+        # 父类虽然会统一乘以 dt，但 tracking/hold 加权平均的分子、分母
+        # 使用同一组 dt-scaled weights，公共 dt 会在归一化时抵消。
+        # 足端漂移仍明显时，可小幅提高上方 support/feet 对应的 scale；
+        # 每次只改 1～2 项且不超过 20%～30%。核心 reward 结构或数值尺度
+        # 若发生大改，只加载 actor/estimator，并重置 critic 和 optimizer。
 
         # reward = exp(-error / sigma). Orientation error is measured between
         # actual and commanded projected gravity, not against a level body.

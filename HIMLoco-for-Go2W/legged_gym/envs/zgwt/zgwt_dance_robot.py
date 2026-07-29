@@ -604,23 +604,23 @@ class ZgwtDance(Zgwt):
         hold_cost = torch.zeros_like(self.rew_buf)
         soft_reward = torch.zeros_like(self.rew_buf)
         hard_safety_penalty = torch.zeros_like(self.rew_buf)
-        tracking_weights = self.cfg.rewards.tracking_weights
-        hold_weights = self.cfg.rewards.hold_weights
-        tracking_weight_sum = sum(float(v) for v in tracking_weights.values())
-        hold_weight_sum = sum(float(v) for v in hold_weights.values())
+        tracking_weight_sum = 0.0
+        hold_weight_sum = 0.0
 
         for name, reward_function in zip(
             self.reward_names, self.reward_functions
         ):
             if name in self.TRACK_REWARD_NAMES:
-                weight = float(tracking_weights[name])
+                weight = abs(float(self.reward_scales[name]))
                 cost = self._tracking_cost(name)
                 tracking_cost += weight * cost
+                tracking_weight_sum += weight
                 self.episode_sums[name] += torch.exp(-cost) * self.dt
             elif name in self.HOLD_REWARD_NAMES:
-                weight = float(hold_weights[name])
+                weight = abs(float(self.reward_scales[name]))
                 cost = self._hold_cost(name)
                 hold_cost += weight * cost
+                hold_weight_sum += weight
                 self.episode_sums[name] += torch.exp(-cost) * self.dt
             else:
                 raw_reward = reward_function()

@@ -55,15 +55,28 @@ def play(
     pitch_amplitude=None,
     height_center=None,
     height_amplitude=None,
+    evaluation_mode="neutral",
+    evaluation_warmup_time=2.0,
+    evaluation_duration=10.0,
+    verbose_pose_print=False,
 ):
+    if evaluation_mode not in ("neutral", "command"):
+        raise ValueError(
+            "evaluation_mode must be either 'neutral' or 'command', "
+            f"got {evaluation_mode!r}"
+        )
+    if evaluation_warmup_time < 0.0:
+        raise ValueError("evaluation_warmup_time must be non-negative")
+    if evaluation_duration <= 0.0:
+        raise ValueError("evaluation_duration must be positive")
+
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)     #环境数量上限
-    env_cfg.terrain.num_rows = 10     #地形行数
-    env_cfg.terrain.num_cols = 8     #地形列数
-    env_cfg.terrain.curriculum = True     #地形课程学习开关
-    env_cfg.terrain.max_init_terrain_level = 9     #地形最大初始课程等级
-    env_cfg.commands.heading_command = False     #是否使用航向命令
+    env_cfg.terrain.mesh_type = "plane"
+    env_cfg.terrain.measure_heights = False
+    env_cfg.terrain.curriculum = False
+    env_cfg.terrain.max_init_terrain_level = 0
     # Evaluation starts from a clean, symmetric stance. Training robustness
     # randomization should not obscure pose-tracking quality in play.
     env_cfg.domain_rand.randomize_initial_joint_pos = False
@@ -72,9 +85,17 @@ def play(
     env_cfg.domain_rand.disturbance = False
     env_cfg.domain_rand.delay = False
     env_cfg.noise.add_noise = False
-    # env_cfg.terrain.mesh_type = 'plane'
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+
+    if evaluation_mode == "neutral":
+        x_vel = 0.0
+        y_vel = 0.0
+        body_yaw = 0.0
+        body_roll = 0.0
+        body_pitch = 0.0
+        body_height = float(env.cfg.rewards.default_body_height)
+        dance_trajectory = False
 
     def command_center_and_amplitude(name):
         lower, upper = env.command_ranges[name]
@@ -163,6 +184,50 @@ def play(
     env.compute_observations()
     obs = env.get_observations()
 
+    # Evaluation references are captured after the runner reset and after the
+    # requested command has been restored, exactly once for the whole run.
+    initial_base_xy = env.root_states[:, :2].clone()
+    initial_support_xy = torch.mean(env.feet_pos[:, :, :2], dim=1).clone()
+    initial_feet_xy = env.feet_pos[:, :, :2].clone()
+
+    leg_joint_mask = torch.ones(
+        env.num_dof, dtype=torch.bool, device=env.device
+    )
+    leg_joint_mask[env.wheel_indices] = False
+    leg_joint_indices = leg_joint_mask.nonzero(as_tuple=False).flatten()
+
+    metric_sums = {
+        name: torch.zeros((), dtype=torch.float, device=env.device)
+        for name in (
+            "roll_error",
+            "pitch_error",
+            "yaw_error",
+            "height_error",
+            "base_xy_drift",
+            "support_xy_drift",
+            "feet_xy_drift",
+            "leg_joint_error",
+            "contact_loss",
+            "torque_saturation",
+            "action_saturation",
+            "reset_count",
+        )
+    }
+    metric_maxima = {
+        name: torch.zeros((), dtype=torch.float, device=env.device)
+        for name in (
+            "roll_error",
+            "pitch_error",
+            "yaw_error",
+            "height_error",
+            "base_xy_drift",
+            "support_xy_drift",
+            "wheel_xy_drift",
+            "leg_joint_error",
+        )
+    }
+    evaluated_steps = 0
+
 
     # export policy as a jit module (used to run it from C++)
     if EXPORT_POLICY:
@@ -180,12 +245,20 @@ def play(
     camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
     img_idx = 0
 
-    for i in range(10*int(env.max_episode_length)):
+    warmup_steps = max(0, int(round(evaluation_warmup_time / env.dt)))
+    evaluation_steps = max(1, int(round(evaluation_duration / env.dt)))
+    total_steps = warmup_steps + evaluation_steps
+
+    for i in range(total_steps):
         set_test_commands(i * env.dt)
         actions = policy(obs.detach())
         obs, _, rews, dones, infos, _, _ = env.step(actions.detach())
 
-        if env.cfg.commands.num_commands >= 6 and i % 50 == 0:
+        if (
+            verbose_pose_print
+            and env.cfg.commands.num_commands >= 6
+            and i % 50 == 0
+        ):
             actual_roll, actual_pitch = env._current_roll_pitch()
             actual_height = env._current_base_height()
 
@@ -198,11 +271,12 @@ def play(
             pitch_now = actual_pitch[robot_index].item()
             height_now = actual_height[robot_index].item()
             body_yaw_now = env._current_relative_yaw()[robot_index].item()
+            wrapped_yaw_error = env._body_yaw_error()[robot_index].item()
 
             print(
                 "\n"
                 f"body yaw: cmd={cmd_body_yaw:+.3f}, actual={body_yaw_now:+.3f}, "
-                f"error={cmd_body_yaw-body_yaw_now:+.3f}\n"
+                f"error={wrapped_yaw_error:+.3f}\n"
                 f"roll:   cmd={cmd_roll:+.3f}, actual={roll_now:+.3f}, "
                 f"error={cmd_roll-roll_now:+.3f}\n"
                 f"pitch:  cmd={cmd_pitch:+.3f}, actual={pitch_now:+.3f}, "
@@ -210,6 +284,74 @@ def play(
                 f"height: cmd={cmd_height:+.3f}, actual={height_now:+.3f}, "
                 f"error={cmd_height-height_now:+.3f}"
             )
+
+        if i >= warmup_steps:
+            evaluated_steps += 1
+            actual_roll, actual_pitch = env._current_roll_pitch()
+            actual_height = env._current_base_height()
+            roll_error = torch.abs(env.commands[:, 3] - actual_roll)
+            pitch_error = torch.abs(env.commands[:, 4] - actual_pitch)
+            yaw_error = torch.abs(env._body_yaw_error())
+            height_error = torch.abs(env.commands[:, 5] - actual_height)
+
+            support_xy = torch.mean(env.feet_pos[:, :, :2], dim=1)
+            base_xy_drift = torch.norm(
+                env.root_states[:, :2] - initial_base_xy, dim=1
+            )
+            support_xy_drift = torch.norm(
+                support_xy - initial_support_xy, dim=1
+            )
+            wheel_xy_drift = torch.norm(
+                env.feet_pos[:, :, :2] - initial_feet_xy, dim=2
+            )
+
+            for name, values in (
+                ("roll_error", roll_error),
+                ("pitch_error", pitch_error),
+                ("yaw_error", yaw_error),
+                ("height_error", height_error),
+                ("base_xy_drift", base_xy_drift),
+                ("support_xy_drift", support_xy_drift),
+            ):
+                metric_sums[name] += torch.sum(values)
+                metric_maxima[name] = torch.maximum(
+                    metric_maxima[name], torch.max(values)
+                )
+
+            metric_sums["feet_xy_drift"] += torch.sum(wheel_xy_drift)
+            metric_maxima["wheel_xy_drift"] = torch.maximum(
+                metric_maxima["wheel_xy_drift"], torch.max(wheel_xy_drift)
+            )
+
+            if evaluation_mode == "neutral":
+                leg_joint_error = torch.abs(
+                    env.dof_pos[:, leg_joint_indices]
+                    - env.default_dof_pos[:, leg_joint_indices]
+                )
+                metric_sums["leg_joint_error"] += torch.sum(leg_joint_error)
+                metric_maxima["leg_joint_error"] = torch.maximum(
+                    metric_maxima["leg_joint_error"],
+                    torch.max(leg_joint_error),
+                )
+
+            contact_loss = (
+                env.contact_forces[:, env.feet_indices, 2] < 5.0
+            )
+            torque_saturation = (
+                torch.abs(env.torques) >= 0.99 * env.torque_limits
+            )
+            action_saturation = (
+                torch.abs(env.actions[:, leg_joint_indices])
+                >= 0.99 * float(env.cfg.normalization.clip_actions)
+            )
+            metric_sums["contact_loss"] += torch.sum(contact_loss)
+            metric_sums["torque_saturation"] += torch.sum(
+                torque_saturation
+            )
+            metric_sums["action_saturation"] += torch.sum(
+                action_saturation
+            )
+            metric_sums["reset_count"] += torch.sum(dones)
 
         if RECORD_FRAMES:
             if i % 2:
@@ -248,6 +390,127 @@ def play(
         elif i==stop_rew_log:
             logger.print_rewards()
 
+    scalar_sums = {name: value.item() for name, value in metric_sums.items()}
+    scalar_maxima = {
+        name: value.item() for name, value in metric_maxima.items()
+    }
+    env_samples = evaluated_steps * env.num_envs
+    wheel_samples = env_samples * len(env.feet_indices)
+    leg_samples = env_samples * len(leg_joint_indices)
+    torque_samples = env_samples * env.num_dof
+
+    means = {
+        name: scalar_sums[name] / env_samples
+        for name in (
+            "roll_error",
+            "pitch_error",
+            "yaw_error",
+            "height_error",
+            "base_xy_drift",
+            "support_xy_drift",
+        )
+    }
+    means["feet_xy_drift"] = scalar_sums["feet_xy_drift"] / wheel_samples
+    means["contact_loss"] = scalar_sums["contact_loss"] / wheel_samples
+    means["torque_saturation"] = (
+        scalar_sums["torque_saturation"] / torque_samples
+    )
+    means["action_saturation"] = (
+        scalar_sums["action_saturation"] / leg_samples
+    )
+    if evaluation_mode == "neutral":
+        means["leg_joint_error"] = (
+            scalar_sums["leg_joint_error"] / leg_samples
+        )
+    # Over the fixed evaluation window, this is the number of resets per
+    # evaluated environment (one reset among 50 envs is therefore 0.02).
+    reset_rate = scalar_sums["reset_count"] / env.num_envs
+
+    print("\n================ ZGWT PLAY EVALUATION ================")
+    print(f"mode: {evaluation_mode}")
+    print(f"environments: {env.num_envs}")
+    print(f"warmup: {evaluation_warmup_time:.1f} s")
+    print(f"evaluation: {evaluation_duration:.1f} s")
+    print("\nPose tracking")
+    print(
+        f"  roll error:    mean={means['roll_error']:.6f}, "
+        f"max={scalar_maxima['roll_error']:.6f} rad"
+    )
+    print(
+        f"  pitch error:   mean={means['pitch_error']:.6f}, "
+        f"max={scalar_maxima['pitch_error']:.6f} rad"
+    )
+    print(
+        f"  yaw error:     mean={means['yaw_error']:.6f}, "
+        f"max={scalar_maxima['yaw_error']:.6f} rad"
+    )
+    print(
+        f"  height error:  mean={means['height_error']:.6f}, "
+        f"max={scalar_maxima['height_error']:.6f} m"
+    )
+    print("\nStationary stability")
+    print(
+        f"  base XY drift:       mean={means['base_xy_drift']:.6f}, "
+        f"max={scalar_maxima['base_xy_drift']:.6f} m"
+    )
+    print(
+        f"  support XY drift:    mean={means['support_xy_drift']:.6f}, "
+        f"max={scalar_maxima['support_xy_drift']:.6f} m"
+    )
+    print(f"  feet XY drift:       mean={means['feet_xy_drift']:.6f} m")
+    print(
+        f"  max wheel drift:     {scalar_maxima['wheel_xy_drift']:.6f} m"
+    )
+    if evaluation_mode == "neutral":
+        print("\nNeutral stance")
+        print(
+            f"  leg joint error: mean={means['leg_joint_error']:.6f}, "
+            f"max={scalar_maxima['leg_joint_error']:.6f} rad"
+        )
+    print("\nSafety")
+    print(f"  episode reset count:    {int(scalar_sums['reset_count'])}")
+    print(f"  fall/reset rate:        {reset_rate:.6f}")
+    print(f"  contact loss ratio:     {means['contact_loss']:.6f}")
+    print(f"  torque saturation:      {means['torque_saturation']:.6f}")
+    print(f"  action saturation:      {means['action_saturation']:.6f}")
+
+    if evaluation_mode == "neutral":
+        review_reasons = []
+        checks = (
+            (means["roll_error"] > 0.03, "roll error exceeds limit"),
+            (means["pitch_error"] > 0.03, "pitch error exceeds limit"),
+            (means["yaw_error"] > 0.02, "yaw error exceeds limit"),
+            (means["height_error"] > 0.015, "height error exceeds limit"),
+            (
+                scalar_maxima["base_xy_drift"] > 0.020,
+                "base drift exceeds limit",
+            ),
+            (
+                scalar_maxima["support_xy_drift"] > 0.015,
+                "support drift exceeds limit",
+            ),
+            (
+                scalar_maxima["wheel_xy_drift"] > 0.035,
+                "wheel drift exceeds limit",
+            ),
+            (reset_rate > 0.01, "reset rate exceeds limit"),
+            (
+                means["torque_saturation"] > 0.01,
+                "torque saturation exceeds limit",
+            ),
+            (
+                means["action_saturation"] > 0.01,
+                "action saturation exceeds limit",
+            ),
+        )
+        review_reasons.extend(reason for failed, reason in checks if failed)
+        print(f"\nResult: {'REVIEW' if review_reasons else 'PASS'}")
+        if review_reasons:
+            print("Reasons:")
+            for reason in review_reasons:
+                print(f"- {reason}")
+    print("======================================================")
+
 if __name__ == '__main__':
     EXPORT_POLICY = True
     RECORD_FRAMES = False
@@ -255,16 +518,14 @@ if __name__ == '__main__':
     args = get_args()
     play(
         args,
+        evaluation_mode="neutral",
         x_vel=0.0,
         y_vel=0.0,
-        # body_yaw is an angle in radians; values above 0.10 are clipped.
-        body_yaw=0.10,
+        body_yaw=0.0,
+        body_roll=0.0,
+        body_pitch=0.0,
+        body_height=0.54,
         dance_trajectory=False,
-        dance_ramp_time=3.0,
-        dance_frequency=0.24,
-        # yaw/roll/pitch/height amplitudes default to the training ranges.
-
-        # body_roll=0.00,
-        # body_pitch=-0.00,
-        # body_height=0.54,
+        # 姿态命令测试时改为 evaluation_mode="command"，并设置相应的
+        # body_yaw、body_roll、body_pitch 和 body_height。
     )

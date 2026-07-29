@@ -118,7 +118,11 @@ class domain_rand:
 
 - 所有人工阶段默认保持相同 reward。
 - 动作抖动时，后期可以小幅增加 `action_rate` 或 `action_smoothness`。
-- 足端漂移时，可以小幅提高 support/feet hold 权重。
+- `class scales` 是全部 reward 的唯一权重来源。父类统一乘入的 `dt` 会在
+  tracking/hold 加权平均的分子和分母中抵消，因此配置中的比例保持不变。
+- 足端漂移时，可以小幅提高 `tracking_support_position`、
+  `tracking_feet_position` 或 `tracking_max_foot_position` 的 scale。
+- 将某个 scale 设为 0 会关闭对应 reward，不需要同步修改另一组权重。
 - 每次只修改 1～2 个参数，单次调整尽量不超过 20%～30%。
 - 核心 reward 结构或数值尺度发生大改时，只加载 actor/estimator，并重置 critic
   和 optimizer。

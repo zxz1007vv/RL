@@ -68,20 +68,21 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
 
-        # 当前启用：standv2（带窄范围动力学随机化的稳定站立）。
-        mode_probabilities = [
-            1.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ]
-
-        # 下一阶段：阶段 1（小范围单轴姿态）。
+        # 上一阶段：standv2（带窄范围动力学随机化的稳定站立）。
         # mode_probabilities = [
-        #     0.30, 0.10, 0.15, 0.15, 0.15, 0.15,
-        #     0.0, 0.0, 0.0,
+        #     1.0,
+        #     0.0, 0.0, 0.0, 0.0,
+        #     0.0, 0.0, 0.0, 0.0,
         #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         # ]
+
+        # 当前启用：stage1v2（小范围单轴姿态）。
+        # 暂不加入 roll+pitch 组合；先确认每个单轴在随机化下都能稳定跟踪。
+        mode_probabilities = [
+            0.35, 0.10, 0.20, 0.20, 0.15, 0.0,
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ]
 
         # 阶段 2 推荐值（完整姿态，height 不与姿态混合）：
         # mode_probabilities = [
@@ -105,16 +106,16 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             # 阶段 0：
-            body_yaw = [0.0, 0.0]
-            body_roll = [0.0, 0.0]
-            body_pitch = [0.0, 0.0]
-            body_height = [0.54, 0.54]
+            # body_yaw = [0.0, 0.0]
+            # body_roll = [0.0, 0.0]
+            # body_pitch = [0.0, 0.0]
+            # body_height = [0.54, 0.54]
 
-            # 下一阶段：阶段 1（小范围单轴姿态）。
-            # body_yaw = [-0.025, 0.025]
-            # body_roll = [-0.08, 0.08]
-            # body_pitch = [-0.08, 0.08]
-            # body_height = [0.49, 0.54]
+            # 当前启用：stage1v2（小范围单轴姿态）。
+            body_yaw = [-0.025, 0.025]
+            body_roll = [-0.08, 0.08]
+            body_pitch = [-0.08, 0.08]
+            body_height = [0.49, 0.54]
 
             # 阶段 2、3、4：
             # body_yaw = [-0.10, 0.10]
@@ -123,7 +124,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_height = [0.40, 0.54]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        # 当前启用：standv2。先适应负载、质心、地面摩擦和 PD 参数误差；
+        # 当前启用：stage1v2，完整继承 standv2 的窄范围动力学随机化；
         # 暂不叠加 motor、noise、push、delay 或初始状态扰动。
         randomize_payload_mass = True
         payload_mass_range = [0.0, 6.0]
@@ -244,7 +245,9 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         init_noise_std = 0.15
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
-        learning_rate = 1.0e-4
+        # 旧 stage1v1 在约 500～1000 次迭代后开始退化。任务切换时采用
+        # 更保守的 PPO 更新，避免破坏 standv2 已学到的稳定站立策略。
+        learning_rate = 5.0e-5
         # Adaptive scheduling raised 1e-4 to 6.67e-3 around iteration 500 in
         # the failed run, after which value loss jumped above 1e3.
         schedule = "fixed"
@@ -252,14 +255,16 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         entropy_coef = 0.0
         min_action_std = 0.05
         max_action_std = 0.25
-        clip_param = 0.15
+        clip_param = 0.10
         max_grad_norm = 0.5
-        num_learning_epochs = 3
+        num_learning_epochs = 2
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "standv2"
-        save_interval = 500
+        run_name = "stage1v2"
+        # stage1v1 的最佳区间出现得较早，加密 checkpoint 便于人工选择。
+        save_interval = 250
+        max_iterations = 10000
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
         # resume=True, load_actor_only=False, load_optimizer=True。
         # 仅小幅修改 auxiliary reward 权重：
@@ -271,6 +276,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # Use load_actor_only=True for checkpoints predating the 78-D critic
         # input or the refactored task reward. Actor/estimator shapes stay valid.
         load_actor_only = False
-        load_optimizer = True
-        load_run = "Jul29_16-37-27_standv1"
-        checkpoint = 3000
+        # 保留 actor/critic/estimator 权重，但为新命令分布重置 Adam 状态。
+        load_optimizer = False
+        load_run = "Jul30_11-38-25_standv2"
+        checkpoint = 4000

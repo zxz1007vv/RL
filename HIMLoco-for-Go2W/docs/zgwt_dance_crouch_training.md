@@ -65,17 +65,21 @@ standv1 已完成该阶段；当前配置不再启用原始阶段 0。
 - Kp/Kd：名义值的 0.90～1.10。
 - motor strength、link mass、noise、delay、push、disturbance 和初始状态扰动保持关闭。
 
-当前配置启用 standv2。训练稳定并通过带载 MuJoCo 检查后，再进入 stage1v2；
-stage1v2 应保留上述窄随机化。
+standv2 已完成；当前配置启用 stage1v2，并保留上述窄随机化。
 
 ### 阶段 1：小范围单轴姿态
 
-- neutral、height、roll、pitch、yaw 和 roll+pitch 混合采样。
+- stage1v2 只采样 neutral、height、roll、pitch 和 yaw，暂不加入组合姿态。
+- 概率依次为 0.35、0.10、0.20、0.20、0.15。
 - yaw：`[-0.025, 0.025]`。
 - roll/pitch：`[-0.08, 0.08]`。
 - height：`[0.49, 0.54]`。
 - 初始无载训练可关闭 noise 和随机化；从 standv2 继续训练 stage1v2 时，
   保留 standv2 的窄范围动力学随机化，noise 仍关闭。
+- stage1v2 保持 reward 系数不变，重置 optimizer，并使用更保守的 PPO：
+  learning rate 为 `5e-5`、clip 为 `0.10`、每轮 2 个 learning epochs。
+- 增量训练 5000 次、每 250 次保存；优先按评估结果选择 checkpoint，
+  不默认认为最后一个 checkpoint 最好。
 
 ### 阶段 2：完整姿态，height 不与姿态混合
 

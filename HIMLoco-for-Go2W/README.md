@@ -10,6 +10,11 @@
 | `zgwt` | ZGWT 轮足机器人 | 16 | URDF | `logs/ZGWT/` |
 | `zgwt_dance` | ZGWT 固定位置姿态/舞蹈任务 | 16 | URDF、MJCF | `logs/ZGWT_DANCE/` |
 
+ZGWT Dance 与 C++ `wholebodycheckedhead` / `WholeBodyChickenHead` 模式之间的完整
+部署接口、debug 新鲜度验证和同步改动记录见
+[ZGWT Dance C++ 部署同步契约](docs/zgwt_dance_cpp_deployment_contract.md)。训练或部署端
+修改观测、命令、动作、控制时序、策略文件或关节映射时，必须在同一提交中更新该文档。
+
 ## 一、框架主要组成及关系
 
 项目可以分为四层：

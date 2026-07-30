@@ -21,7 +21,8 @@ domain randomization、delay、push 或 disturbance。每个阶段都由人工�
 
 1. 在 `zgwt_dance_config.py` 的 `MANUAL TRAINING STAGE` 区域选择当前阶段的
    `mode_probabilities` 和 `ranges`。
-2. 在阶段 0～3 保持 noise 和 domain randomization 关闭。
+2. 初始无载版本可在阶段 0～3 关闭随机化；面向带载部署时，从 standv2
+   开始保留已经验证过的窄范围动力学随机化。
 3. 启动训练并人工检查 TensorBoard 与仿真效果。
 4. 当前阶段效果稳定后保存 checkpoint。
 5. 修改同一个配置文件进入下一阶段。
@@ -52,7 +53,20 @@ load_optimizer = True
 - height 固定为 `0.54 m`。
 - noise、delay、随机化、push、disturbance 全部关闭。
 
-当前配置默认启用阶段 0。
+standv1 已完成该阶段；当前配置不再启用原始阶段 0。
+
+### standv2：低随机化稳定站立
+
+- 从 Jul29_16-37-27_standv1/model_3000.pt 继续训练，不从零开始。
+- neutral 概率为 1，yaw、roll、pitch 均为 0，高度固定为 0.54 m。
+- payload mass：0～6 kg。
+- base COM：在 URDF 名义值上进行三轴 ±0.02 m 偏移。
+- friction：0.75～1.15，覆盖当前 MuJoCo 地面的 0.8。
+- Kp/Kd：名义值的 0.90～1.10。
+- motor strength、link mass、noise、delay、push、disturbance 和初始状态扰动保持关闭。
+
+当前配置启用 standv2。训练稳定并通过带载 MuJoCo 检查后，再进入 stage1v2；
+stage1v2 应保留上述窄随机化。
 
 ### 阶段 1：小范围单轴姿态
 
@@ -60,7 +74,8 @@ load_optimizer = True
 - yaw：`[-0.025, 0.025]`。
 - roll/pitch：`[-0.08, 0.08]`。
 - height：`[0.49, 0.54]`。
-- noise 和随机化仍然关闭。
+- 初始无载训练可关闭 noise 和随机化；从 standv2 继续训练 stage1v2 时，
+  保留 standv2 的窄范围动力学随机化，noise 仍关闭。
 
 ### 阶段 2：完整姿态，height 不与姿态混合
 

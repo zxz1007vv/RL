@@ -127,6 +127,9 @@ class LeggedRobotCfg(BaseConfig):
 
         randomize_com_displacement = True
         com_displacement_range = [-0.05, 0.05]
+        # False preserves the legacy behavior where the sampled value replaces
+        # the base COM. Tasks that need a true offset can opt in explicitly.
+        com_displacement_is_offset = False
 
         randomize_link_mass = False
         link_mass_range = [0.9, 1.1]

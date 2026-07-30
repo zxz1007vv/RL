@@ -470,7 +470,20 @@ class LeggedRobot(BaseTask):
             props[0].mass = self.default_rigid_body_mass[0] + self.payload[env_id, 0]
             
         if self.cfg.domain_rand.randomize_com_displacement:
-            props[0].com = gymapi.Vec3(self.com_displacement[env_id, 0], self.com_displacement[env_id, 1], self.com_displacement[env_id, 2])
+            sampled_com = self.com_displacement[env_id]
+            if getattr(
+                self.cfg.domain_rand, "com_displacement_is_offset", False
+            ):
+                nominal_com = props[0].com
+                props[0].com = gymapi.Vec3(
+                    nominal_com.x + sampled_com[0],
+                    nominal_com.y + sampled_com[1],
+                    nominal_com.z + sampled_com[2],
+                )
+            else:
+                props[0].com = gymapi.Vec3(
+                    sampled_com[0], sampled_com[1], sampled_com[2]
+                )
 
         if self.cfg.domain_rand.randomize_link_mass:
             rng = self.cfg.domain_rand.link_mass_range

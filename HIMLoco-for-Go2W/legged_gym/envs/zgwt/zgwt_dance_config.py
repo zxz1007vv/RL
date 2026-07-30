@@ -68,20 +68,20 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
 
-        # 阶段 0 推荐值（稳定站立）：
-        # mode_probabilities = [
-        #     1.0,
-        #     0.0, 0.0, 0.0, 0.0,
-        #     0.0, 0.0, 0.0, 0.0,
-        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        # ]
-
-        # 当前启用：阶段 1（小范围单轴姿态）。
+        # 当前启用：standv2（带窄范围动力学随机化的稳定站立）。
         mode_probabilities = [
-            0.30, 0.10, 0.15, 0.15, 0.15, 0.15,
-            0.0, 0.0, 0.0,
+            1.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
+
+        # 下一阶段：阶段 1（小范围单轴姿态）。
+        # mode_probabilities = [
+        #     0.30, 0.10, 0.15, 0.15, 0.15, 0.15,
+        #     0.0, 0.0, 0.0,
+        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        # ]
 
         # 阶段 2 推荐值（完整姿态，height 不与姿态混合）：
         # mode_probabilities = [
@@ -105,16 +105,16 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
             # 阶段 0：
-            # body_yaw = [0.0, 0.0]
-            # body_roll = [0.0, 0.0]
-            # body_pitch = [0.0, 0.0]
-            # body_height = [0.54, 0.54]
+            body_yaw = [0.0, 0.0]
+            body_roll = [0.0, 0.0]
+            body_pitch = [0.0, 0.0]
+            body_height = [0.54, 0.54]
 
-            # 当前启用：阶段 1（小范围单轴姿态）。
-            body_yaw = [-0.025, 0.025]
-            body_roll = [-0.08, 0.08]
-            body_pitch = [-0.08, 0.08]
-            body_height = [0.49, 0.54]
+            # 下一阶段：阶段 1（小范围单轴姿态）。
+            # body_yaw = [-0.025, 0.025]
+            # body_roll = [-0.08, 0.08]
+            # body_pitch = [-0.08, 0.08]
+            # body_height = [0.49, 0.54]
 
             # 阶段 2、3、4：
             # body_yaw = [-0.10, 0.10]
@@ -123,22 +123,26 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_height = [0.40, 0.54]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        # 当前启用：阶段 0～3 全部关闭。阶段 4 再人工开启下方窄范围项。
-        randomize_payload_mass = False
-        payload_mass_range = [0.0, 0.0]
-        randomize_com_displacement = False
-        com_displacement_range = [0.0, 0.0]
+        # 当前启用：standv2。先适应负载、质心、地面摩擦和 PD 参数误差；
+        # 暂不叠加 motor、noise、push、delay 或初始状态扰动。
+        randomize_payload_mass = True
+        payload_mass_range = [0.0, 6.0]
+        randomize_com_displacement = True
+        # 相对 URDF 名义 base COM 的三轴偏移，每个环境独立采样。
+        com_displacement_range = [-0.02, 0.02]
+        com_displacement_is_offset = True
         randomize_link_mass = False
         link_mass_range = [1.0, 1.0]
-        randomize_friction = False
-        friction_range = [0.85, 1.15]
+        randomize_friction = True
+        # 覆盖当前 MuJoCo 地面 friction=0.8。
+        friction_range = [0.75, 1.15]
         randomize_restitution = False
         restitution_range = [0.0, 0.15]
         randomize_motor_strength = False
         motor_strength_range = [0.90, 1.10]
-        randomize_kp = False
+        randomize_kp = True
         kp_range = [0.90, 1.10]
-        randomize_kd = False
+        randomize_kd = True
         kd_range = [0.90, 1.10]
         randomize_initial_joint_pos = False
         # Keep recovery diversity without starting from visibly crooked legs.
@@ -254,7 +258,7 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage1v1"
+        run_name = "standv2"
         save_interval = 500
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
         # resume=True, load_actor_only=False, load_optimizer=True。
@@ -268,5 +272,5 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # input or the refactored task reward. Actor/estimator shapes stay valid.
         load_actor_only = False
         load_optimizer = True
-        load_run = "Jul29_18-55-56_stage1v1"
-        checkpoint = 20000
+        load_run = "Jul29_16-37-27_standv1"
+        checkpoint = 3000

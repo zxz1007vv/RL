@@ -184,17 +184,18 @@ def get_args():
     #     args.sim_device += f":{args.sim_device_id}"
     return args
 
-def export_policy_as_jit(actor_critic, path):
+def export_policy_as_jit(actor_critic, path, filename=None):
     if hasattr(actor_critic, 'estimator'):
         # assumes LSTM: TODO add GRU
         exporter = PolicyExporterHIM(actor_critic)
-        exporter.export(path)
-    else: 
+        return exporter.export(path, filename or 'policy.pt')
+    else:
         os.makedirs(path, exist_ok=True)
-        path = os.path.join(path, 'policy_1.pt')
+        path = os.path.join(path, filename or 'policy_1.pt')
         model = copy.deepcopy(actor_critic.actor).to('cpu')
         traced_script_module = torch.jit.script(model)
         traced_script_module.save(path)
+        return path
 
 # class PolicyExporterLSTM(torch.nn.Module):
 #     def __init__(self, actor_critic):
@@ -240,11 +241,12 @@ class PolicyExporterHIM(torch.nn.Module):
         obs_curr = obs_history.squeeze(0)[:self.num_one_step_obs]
         actor_in = torch.cat([obs_curr, vel, z], dim=0)   # 1-D
         return self.actor(actor_in.unsqueeze(0)).squeeze(0)  # actor 需要 2-D 输入，输出再压回 1-D
-    def export(self, path):
+    def export(self, path, filename='policy.pt'):
         os.makedirs(path, exist_ok=True)
-        path = os.path.join(path, 'policy.pt')
+        path = os.path.join(path, filename)
         self.to('cpu')
         traced_script_module = torch.jit.script(self)
         traced_script_module.save(path)
+        return path
     
     

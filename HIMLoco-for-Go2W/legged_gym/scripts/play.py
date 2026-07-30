@@ -29,11 +29,21 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 from legged_gym import LEGGED_GYM_ROOT_DIR
+import itertools
 import os
+import re
+import signal
+import shutil
 
 import isaacgym
 from legged_gym.envs import *
-from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger
+from legged_gym.utils import (
+    Logger,
+    export_policy_as_jit,
+    get_args,
+    get_load_path,
+    task_registry,
+)
 
 import numpy as np
 import torch
@@ -57,7 +67,8 @@ def play(
     height_amplitude=None,
     evaluation_mode="neutral",
     evaluation_warmup_time=2.0,
-    evaluation_duration=10.0,
+    evaluation_duration=600.0,
+    infinite_report_interval=10.0,
     verbose_pose_print=False,
 ):
     if evaluation_mode not in ("neutral", "command"):
@@ -67,8 +78,10 @@ def play(
         )
     if evaluation_warmup_time < 0.0:
         raise ValueError("evaluation_warmup_time must be non-negative")
-    if evaluation_duration <= 0.0:
+    if evaluation_duration is not None and evaluation_duration <= 0.0:
         raise ValueError("evaluation_duration must be positive")
+    if infinite_report_interval <= 0.0:
+        raise ValueError("infinite_report_interval must be positive")
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
@@ -232,8 +245,29 @@ def play(
     # export policy as a jit module (used to run it from C++)
     if EXPORT_POLICY:
         path = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'policies')
-        export_policy_as_jit(ppo_runner.alg.actor_critic, path)
-        print('Exported policy as jit script to: ', path)
+        checkpoint_root = os.path.join(
+            LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name
+        )
+        checkpoint_path = get_load_path(
+            checkpoint_root,
+            load_run=train_cfg.runner.load_run,
+            checkpoint=train_cfg.runner.checkpoint,
+        )
+        checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+        checkpoint_label = checkpoint_name.split('model_', 1)[-1]
+        run_label = re.sub(
+            r'[^A-Za-z0-9_.-]+', '_', str(train_cfg.runner.run_name)
+        ).strip('_.-') or 'unnamed_run'
+        export_filename = f'policy_{run_label}_ckpt{checkpoint_label}.pt'
+        exported_path = export_policy_as_jit(
+            ppo_runner.alg.actor_critic, path, filename=export_filename
+        )
+        latest_path = os.path.join(path, 'policy.pt')
+        if os.path.abspath(exported_path) != os.path.abspath(latest_path):
+            shutil.copy2(exported_path, latest_path)
+        print('Loaded checkpoint: ', checkpoint_path)
+        print('Exported versioned policy: ', exported_path)
+        print('Updated deployment policy: ', latest_path)
 
     logger = Logger(env.dt)
     robot_index = 0 # which robot is used for logging
@@ -246,10 +280,33 @@ def play(
     img_idx = 0
 
     warmup_steps = max(0, int(round(evaluation_warmup_time / env.dt)))
-    evaluation_steps = max(1, int(round(evaluation_duration / env.dt)))
-    total_steps = warmup_steps + evaluation_steps
+    stop_requested = False
+    previous_sigint_handler = None
+    report_steps = None
 
-    for i in range(total_steps):
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        if stop_requested:
+            raise KeyboardInterrupt
+        stop_requested = True
+        print("\n收到 Ctrl+C，正在结束当前仿真步并输出完整误差汇总……")
+
+    if evaluation_duration is None:
+        step_indices = itertools.count()
+        report_steps = max(1, int(round(infinite_report_interval / env.dt)))
+        previous_sigint_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, request_stop)
+        print(
+            "Play 将持续运行；每 "
+            f"{infinite_report_interval:.1f} 秒输出一次累计误差，"
+            "按 Ctrl+C 停止并输出完整汇总。"
+        )
+    else:
+        evaluation_steps = max(1, int(round(evaluation_duration / env.dt)))
+        total_steps = warmup_steps + evaluation_steps
+        step_indices = range(total_steps)
+
+    for i in step_indices:
         set_test_commands(i * env.dt)
         actions = policy(obs.detach())
         obs, _, rews, dones, infos, _, _ = env.step(actions.detach())
@@ -353,6 +410,28 @@ def play(
             )
             metric_sums["reset_count"] += torch.sum(dones)
 
+            if (
+                evaluation_duration is None
+                and evaluated_steps % report_steps == 0
+            ):
+                env_samples = evaluated_steps * env.num_envs
+                elapsed_time = evaluated_steps * env.dt
+                print(
+                    "\n"
+                    f"[ZGWT 实时累计误差 | {elapsed_time:.1f} s]\n"
+                    f"  roll:   mean={metric_sums['roll_error'].item() / env_samples:.6f}, "
+                    f"max={metric_maxima['roll_error'].item():.6f} rad\n"
+                    f"  pitch:  mean={metric_sums['pitch_error'].item() / env_samples:.6f}, "
+                    f"max={metric_maxima['pitch_error'].item():.6f} rad\n"
+                    f"  yaw:    mean={metric_sums['yaw_error'].item() / env_samples:.6f}, "
+                    f"max={metric_maxima['yaw_error'].item():.6f} rad\n"
+                    f"  height: mean={metric_sums['height_error'].item() / env_samples:.6f}, "
+                    f"max={metric_maxima['height_error'].item():.6f} m\n"
+                    f"  base XY drift: mean={metric_sums['base_xy_drift'].item() / env_samples:.6f}, "
+                    f"max={metric_maxima['base_xy_drift'].item():.6f} m\n"
+                    f"  reset count: {int(metric_sums['reset_count'].item())}"
+                )
+
         if RECORD_FRAMES:
             if i % 2:
                 filename = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'frames', f"{img_idx}.png")
@@ -389,6 +468,15 @@ def play(
                     logger.log_rewards(infos["episode"], num_episodes)
         elif i==stop_rew_log:
             logger.print_rewards()
+
+        if stop_requested:
+            break
+
+    if previous_sigint_handler is not None:
+        signal.signal(signal.SIGINT, previous_sigint_handler)
+    if evaluated_steps == 0:
+        print("没有完成有效评估采样，因此无法计算误差汇总。")
+        return
 
     scalar_sums = {name: value.item() for name, value in metric_sums.items()}
     scalar_maxima = {
@@ -430,7 +518,7 @@ def play(
     print(f"mode: {evaluation_mode}")
     print(f"environments: {env.num_envs}")
     print(f"warmup: {evaluation_warmup_time:.1f} s")
-    print(f"evaluation: {evaluation_duration:.1f} s")
+    print(f"evaluation: {evaluated_steps * env.dt:.1f} s")
     print("\nPose tracking")
     print(
         f"  roll error:    mean={means['roll_error']:.6f}, "
@@ -518,14 +606,16 @@ if __name__ == '__main__':
     args = get_args()
     play(
         args,
-        evaluation_mode="neutral",
+        evaluation_mode="command",
         x_vel=0.0,
         y_vel=0.0,
-        body_yaw=0.0,
+        body_yaw=0.05,
         body_roll=0.0,
         body_pitch=0.0,
         body_height=0.54,
         dance_trajectory=False,
+        evaluation_duration=None,
+        # 设置为 None 时将一直运行，直到 Ctrl+C 或关闭 viewer。
         # 姿态命令测试时改为 evaluation_mode="command"，并设置相应的
         # body_yaw、body_roll、body_pitch 和 body_height。
     )

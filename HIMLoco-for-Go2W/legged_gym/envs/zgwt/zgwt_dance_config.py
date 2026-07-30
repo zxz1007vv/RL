@@ -268,5 +268,5 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # input or the refactored task reward. Actor/estimator shapes stay valid.
         load_actor_only = False
         load_optimizer = True
-        load_run = "Jul29_16-37-27_standv1"
-        checkpoint = 3000
+        load_run = "Jul29_18-55-56_stage1v1"
+        checkpoint = 20000

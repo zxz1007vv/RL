@@ -80,6 +80,11 @@ class HIMOnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        # A checkpoint can be used either to resume the same run or to initialize
+        # a new manual training stage.  Keep the immediate parent checkpoint as
+        # provenance even when the new stage resets its local iteration counter.
+        self.parent_checkpoint_path = None
+        self.parent_checkpoint_iteration = None
 
         _, _ = self.env.reset()
     
@@ -253,6 +258,11 @@ class HIMOnPolicyRunner:
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'estimator_optimizer_state_dict': self.alg.actor_critic.estimator.optimizer.state_dict(),
             'iter': saved_iteration,
+            'parent_checkpoint_path': self.parent_checkpoint_path,
+            'parent_checkpoint_iteration': self.parent_checkpoint_iteration,
+            'iteration_reset_on_load': bool(
+                self.cfg.get("reset_iteration_on_load", False)
+            ),
             'infos': infos,
             }, path)
 
@@ -286,7 +296,21 @@ class HIMOnPolicyRunner:
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
             self.alg.actor_critic.estimator.optimizer.load_state_dict(loaded_dict['estimator_optimizer_state_dict'])
-        self.current_learning_iteration = loaded_dict['iter']
+        source_iteration = int(loaded_dict.get('iter', 0))
+        reset_iteration = bool(self.cfg.get("reset_iteration_on_load", False))
+        self.parent_checkpoint_path = os.path.abspath(path)
+        self.parent_checkpoint_iteration = source_iteration
+        self.current_learning_iteration = 0 if reset_iteration else source_iteration
+        if reset_iteration:
+            print(
+                "Loaded parent checkpoint iteration: "
+                f"{source_iteration}; new stage local iteration reset to 0"
+            )
+        else:
+            print(
+                "Resuming checkpoint iteration: "
+                f"{source_iteration}; local iteration preserved"
+            )
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None):

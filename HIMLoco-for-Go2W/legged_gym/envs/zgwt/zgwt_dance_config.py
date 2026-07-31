@@ -76,8 +76,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         # ]
 
-        # 当前启用：stage1v2（小范围单轴姿态）。
-        # 暂不加入 roll+pitch 组合；先确认每个单轴在随机化下都能稳定跟踪。
+        # 当前启用：stage1v3（带臂等效载荷下的小范围单轴姿态）。
+        # 保持 stage1v2 的任务分布，只增强持续偏载鲁棒性，不加入组合姿态。
         mode_probabilities = [
             0.35, 0.10, 0.20, 0.20, 0.15, 0.0,
             0.0, 0.0, 0.0,
@@ -111,7 +111,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_pitch = [0.0, 0.0]
             # body_height = [0.54, 0.54]
 
-            # 当前启用：stage1v2（小范围单轴姿态）。
+            # 当前启用：stage1v3（范围保持与 stage1v2 相同）。
             body_yaw = [-0.025, 0.025]
             body_roll = [-0.08, 0.08]
             body_pitch = [-0.08, 0.08]
@@ -124,13 +124,15 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_height = [0.40, 0.54]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        # 当前启用：stage1v2，完整继承 standv2 的窄范围动力学随机化；
+        # 当前启用：stage1v3。C++ 带臂接触力对应总质量约 46.4 kg，
+        # 相比训练 URDF 的 41.05 kg 多约 5.35 kg。质量范围保留约 30% 裕量，
+        # 同时扩大 base COM 偏移以覆盖机械臂造成的持续单侧/后向载荷矩。
         # 暂不叠加 motor、noise、push、delay 或初始状态扰动。
         randomize_payload_mass = True
-        payload_mass_range = [0.0, 6.0]
+        payload_mass_range = [0.0, 10.0]
         randomize_com_displacement = True
         # 相对 URDF 名义 base COM 的三轴偏移，每个环境独立采样。
-        com_displacement_range = [-0.02, 0.02]
+        com_displacement_range = [-0.05, 0.05]
         com_displacement_is_offset = True
         randomize_link_mass = False
         link_mass_range = [1.0, 1.0]
@@ -149,10 +151,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # Keep recovery diversity without starting from visibly crooked legs.
         initial_joint_pos_range = [0.90, 1.10]
         randomize_initial_base_velocity = False
-        disturbance = False
-        disturbance_range = [-10.0, 10.0]
+        disturbance = True
+        disturbance_range = [-5.0, 5.0]
         disturbance_interval = 8
-        push_robots = False
+        push_robots = True
         push_interval_s = 12
         max_push_vel_xy = 1.2
         delay = False
@@ -245,9 +247,9 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         init_noise_std = 0.15
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
-        # 旧 stage1v1 在约 500～1000 次迭代后开始退化。任务切换时采用
-        # 更保守的 PPO 更新，避免破坏 standv2 已学到的稳定站立策略。
-        learning_rate = 5.0e-5
+        # stage1v3 从 stage1v2 的早期最佳点做短程载荷鲁棒性微调。
+        # 进一步降低学习率和 clip，避免重复出现约 2000 次更新后的策略退化。
+        learning_rate = 2.5e-5
         # Adaptive scheduling raised 1e-4 to 6.67e-3 around iteration 500 in
         # the failed run, after which value loss jumped above 1e3.
         schedule = "fixed"
@@ -255,15 +257,15 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         entropy_coef = 0.0
         min_action_std = 0.05
         max_action_std = 0.25
-        clip_param = 0.10
+        clip_param = 0.08
         max_grad_norm = 0.5
         num_learning_epochs = 2
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage1v2"
-        # stage1v1 的最佳区间出现得较早，加密 checkpoint 便于人工选择。
-        save_interval = 250
+        run_name = "stage1v4"
+        # 本阶段只做短程偏载微调；每 100 次评估一次，不默认选择最终 checkpoint。
+        save_interval = 200
         max_iterations = 10000
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
         # resume=True, load_actor_only=False, load_optimizer=True。
@@ -273,10 +275,13 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # resume=True, load_actor_only=True, load_optimizer=False。
         # 修改 actor observation 维度/顺序或 action 维度后，旧 actor 不兼容。
         resume = True
+        # 人工切换到新训练阶段时只继承模型权重，不继承上一阶段的迭代编号。
+        # 同一阶段中断后续训时必须临时改为 False。
+        reset_iteration_on_load = True
         # Use load_actor_only=True for checkpoints predating the 78-D critic
         # input or the refactored task reward. Actor/estimator shapes stay valid.
         load_actor_only = False
-        # 保留 actor/critic/estimator 权重，但为新命令分布重置 Adam 状态。
+        # 保留 actor/critic/estimator 权重，但为增强后的载荷分布重置 Adam 状态。
         load_optimizer = False
-        load_run = "Jul30_11-38-25_standv2"
-        checkpoint = 4000
+        load_run = "Jul30_14-54-33_stage1v2"
+        checkpoint = 4750

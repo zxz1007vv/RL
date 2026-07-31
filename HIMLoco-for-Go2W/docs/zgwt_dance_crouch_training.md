@@ -40,9 +40,30 @@ python legged_gym/scripts/train.py --task zgwt_dance --headless
 resume = True
 load_run = "上一阶段的运行目录名"
 checkpoint = -1
+reset_iteration_on_load = True
 load_actor_only = False
 load_optimizer = True
 ```
+
+`reset_iteration_on_load=True` 表示“从上一阶段初始化一个新阶段”：模型权重按配置
+加载，但新运行的 checkpoint 和 TensorBoard 横轴从本阶段的 0 开始。checkpoint 中会
+另外记录父模型路径和父 iteration，因此不会丢失训练血缘。
+
+如果只是同一阶段训练被中断，需要从该阶段已有 checkpoint 原位续训，则改为：
+
+```python
+resume = True
+reset_iteration_on_load = False
+load_run = "当前阶段的运行目录名"
+checkpoint = -1
+```
+
+不要用 checkpoint 文件名的累计数字表达 curriculum 阶段。每个新阶段独立计数，
+例如 standv2 的 `model_4000.pt` 可以作为 stage1v2 的父模型，而 stage1v2 自己仍从
+`model_0.pt` 开始保存。
+
+`play.py` 只做评估和导出，不会创建新训练阶段，因此会自动保留所加载 checkpoint
+中的 iteration；这不影响通过 `--load_run` 和 `--checkpoint` 选择模型。
 
 ## 推荐人工阶段
 
@@ -65,7 +86,8 @@ standv1 已完成该阶段；当前配置不再启用原始阶段 0。
 - Kp/Kd：名义值的 0.90～1.10。
 - motor strength、link mass、noise、delay、push、disturbance 和初始状态扰动保持关闭。
 
-standv2 已完成；当前配置启用 stage1v2，并保留上述窄随机化。
+standv2 已完成；stage1v2 已选择旧编号 checkpoint 4750（约 750 次本阶段更新）作为
+后续偏载鲁棒性微调的父模型。
 
 ### 阶段 1：小范围单轴姿态
 
@@ -80,6 +102,20 @@ standv2 已完成；当前配置启用 stage1v2，并保留上述窄随机化。
   learning rate 为 `5e-5`、clip 为 `0.10`、每轮 2 个 learning epochs。
 - 增量训练 5000 次、每 250 次保存；优先按评估结果选择 checkpoint，
   不默认认为最后一个 checkpoint 最好。
+
+### stage1v3：带臂等效偏载微调（当前启用）
+
+- 从 `Jul30_14-54-33_stage1v2/model_4750.pt` 初始化。
+- 新阶段本地 iteration 从 0 开始，运行名为 `stage1v3`。
+- mode probabilities 和 yaw/roll/pitch/height 范围保持 stage1v2 不变。
+- 训练 URDF 总质量约 41.05 kg；C++ 带臂四足接触力对应约 46.4 kg，等效附加质量
+  约 5.35 kg，因此 payload 使用 `0～8 kg`，为实测值保留约 30% 裕量。
+- base COM 三轴偏移从 `±0.02 m` 扩大到 `±0.05 m`，覆盖机械臂造成的持续单侧和
+  后向载荷矩。
+- friction 和 Kp/Kd 保持 standv2 的窄随机化；motor、noise、delay、push、
+  disturbance、link mass 和初始状态扰动仍关闭。
+- reward 保持不变，只将 learning rate 降为 `2.5e-5`、PPO clip 降为 `0.08`。
+- 只训练 1000 次，每 100 次保存并人工评估；不默认使用最后一个 checkpoint。
 
 ### 阶段 2：完整姿态，height 不与姿态混合
 
@@ -152,6 +188,7 @@ class domain_rand:
 
 ```python
 resume = True
+reset_iteration_on_load = True  # 新阶段；同阶段断点续训设为 False
 load_actor_only = False
 load_optimizer = True
 ```
@@ -160,6 +197,7 @@ load_optimizer = True
 
 ```python
 resume = True
+reset_iteration_on_load = True
 load_actor_only = False
 load_optimizer = False
 ```
@@ -168,6 +206,7 @@ load_optimizer = False
 
 ```python
 resume = True
+reset_iteration_on_load = True
 load_actor_only = True
 load_optimizer = False
 ```

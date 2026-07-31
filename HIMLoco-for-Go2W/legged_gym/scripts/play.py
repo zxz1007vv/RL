@@ -189,6 +189,10 @@ def play(
     obs = env.get_observations()
     # load policy
     train_cfg.runner.resume = True
+    # Evaluation/export does not create a new training stage. Preserve the
+    # checkpoint iteration for truthful diagnostics; train.py still follows the
+    # stage-specific reset_iteration_on_load setting from the task config.
+    train_cfg.runner.reset_iteration_on_load = False
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
     policy = ppo_runner.get_inference_policy(device=env.device)
     # The runner resets the environment while it is created, so restore the

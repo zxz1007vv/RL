@@ -410,6 +410,8 @@ WholeBodyChickenHead 的 dog observation、action 和 torque 必须一致。开�
 
 | 日期 | 契约版本 | 训练 run/checkpoint | 改动摘要 | C++ 同步状态 |
 | --- | --- | --- | --- | --- |
+| 2026-07-30 | `zgwt-dance-deploy-v3` | `stage1v3` 从 `Jul30_14-54-33_stage1v2/model_4750.pt` 初始化 | 根据 C++ 约 46.4 kg 总支撑重量，将训练 payload 扩为 0～8 kg、base COM 偏移扩为 ±0.05 m；任务范围与网络接口不变 | 后续按 `policy_stage1v3_ckpt<本地编号>.pt` 同步 |
+| 2026-07-30 | `zgwt-dance-deploy-v2` | 后续新阶段 | 新阶段加载父 checkpoint 时本地 iteration 重置为 0；checkpoint 额外保存父路径和父 iteration，同阶段断点续训才保留编号 | C++ 只需按版本化 policy 文件名和哈希识别模型 |
 | 2026-07-30 | `zgwt-dance-deploy-v1` | Stage1v2，最终 checkpoint 待确认 | 建立观测、命令、动作、轮子驻车、时序、actuator 隔离和 debug 新鲜度契约 | 待 C++ 对拍 |
 
 ### 待同步事项

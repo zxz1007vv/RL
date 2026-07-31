@@ -69,6 +69,16 @@ class ZgwtDance(Zgwt):
 
     def _init_buffers(self):
         super()._init_buffers()
+        if not hasattr(self, "policy_dof_indices"):
+            self.policy_dof_indices = torch.arange(
+                self.num_actions, dtype=torch.long, device=self.device
+            )
+        if not hasattr(self, "policy_wheel_indices"):
+            self.policy_wheel_indices = self.wheel_indices
+        if self.policy_dof_indices.numel() != self.num_actions:
+            raise ValueError(
+                "policy_dof_indices must contain exactly num_actions entries"
+            )
         expected_actor = 3 + 3 + 6 + 3 * self.num_actions
         expected_privileged = expected_actor + 3 + 3 + 3 * len(self.feet_indices)
         if self.cfg.env.num_one_step_observations != 60 or expected_actor != 60:
@@ -117,7 +127,7 @@ class ZgwtDance(Zgwt):
                 f"expected actions [{self.num_envs}, {self.num_actions}], "
                 f"got {list(actions.shape)}"
             )
-        return super().step(effective_actions(actions, self.wheel_indices))
+        return super().step(effective_actions(actions, self.policy_wheel_indices))
 
     def _normalized_probabilities(self, values, label):
         probabilities = torch.tensor(
@@ -476,9 +486,12 @@ class ZgwtDance(Zgwt):
             self._disturbance_robots()
 
     def _build_current_observation(self, add_noise):
-        dof_err = self.dof_pos - self.default_dof_pos
+        policy_dof_pos = self.dof_pos[:, self.policy_dof_indices]
+        policy_default_dof_pos = self.default_dof_pos[:, self.policy_dof_indices]
+        policy_dof_vel = self.dof_vel[:, self.policy_dof_indices]
+        dof_err = policy_dof_pos - policy_default_dof_pos
         dof_err = dof_err.clone()
-        dof_err[:, self.wheel_indices] = 0.0
+        dof_err[:, self.policy_wheel_indices] = 0.0
         observed_commands = self.commands.clone()
         # Absolute yaw is unobservable from projected gravity. Supplying the
         # relative yaw error keeps the actor input Markovian without adding a
@@ -499,7 +512,7 @@ class ZgwtDance(Zgwt):
                 self.projected_gravity,
                 observed_commands,
                 dof_err * self.obs_scales.dof_pos,
-                self.dof_vel * self.obs_scales.dof_vel,
+                policy_dof_vel * self.obs_scales.dof_vel,
                 self.actions,
             ),
             dim=-1,
@@ -907,9 +920,12 @@ class ZgwtDance(Zgwt):
         """Keep a symmetric nominal stance only near the neutral pose command."""
         neutral_weight = self._neutral_pose_weight()
 
-        joint_error = self.dof_pos - self.default_dof_pos
+        joint_error = (
+            self.dof_pos[:, self.policy_dof_indices]
+            - self.default_dof_pos[:, self.policy_dof_indices]
+        )
         joint_error = joint_error.clone()
-        joint_error[:, self.wheel_indices] = 0.0
+        joint_error[:, self.policy_wheel_indices] = 0.0
         return torch.sum(torch.abs(joint_error), dim=1) * neutral_weight
 
     def _neutral_pose_weight(self):

@@ -267,7 +267,9 @@ class HIMOnPolicyRunner:
             }, path)
 
     def load(self, path, load_optimizer=None, actor_only=None):
-        loaded_dict = torch.load(path)
+        # Checkpoints are commonly produced on CUDA but play/diagnostics may run
+        # on a CPU-only host.  Always remap tensors to the runner device.
+        loaded_dict = torch.load(path, map_location=self.device)
         if actor_only is None:
             actor_only = bool(self.cfg.get("load_actor_only", False))
         if load_optimizer is None:

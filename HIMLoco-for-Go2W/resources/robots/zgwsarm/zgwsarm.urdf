@@ -12,13 +12,6 @@
     discardvisual="false" />
   </mujoco>
 
-  <link name="world"/>
-  <joint name="fixed" type="revolute">
-    <origin xyz="0 0 0" rpy="0 0 0" />
-    <parent link="world"/>
-    <child link="BASE_LINK"/>
-  </joint>
-
   <link
     name="BASE_LINK">
     <inertial>
@@ -1465,9 +1458,10 @@ name="base_joint" type="fixed">
       <material name="gray_dark"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
       <geometry>
-        <mesh filename="./assets/ROBOT_ARM_LINK7.STL" />
+        <!-- 训练碰撞使用保守圆柱，避免末端三角网格拖慢 PhysX。 -->
+        <cylinder length="0.08" radius="0.04" />
       </geometry>
     </collision>
   </link>

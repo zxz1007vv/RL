@@ -1,0 +1,713 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="ZGWSARM">
+  <mujoco>
+    <compiler meshdir="./assets/" balanceinertia="true" discardvisual="false" />
+  </mujoco>
+  <link name="BASE_LINK">
+    <inertial>
+      <origin xyz="0.002176 0.011832 -0.009523" rpy="0 0 0" />
+      <mass value="20.25" />
+      <inertia ixx="0.120345" ixy="0.000149" ixz="-0.003415" iyy="0.937020" iyz="0.001455" izz="0.987983" />
+    </inertial>
+    <visual>
+      <origin xyz="0.41 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.10 0.10 0.16" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.41 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.10 0.10 0.16" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.40 0.22 0.15" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.41 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.10 0.10 0.16" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="FAR_ABAD_LINK">
+    <inertial>
+      <origin xyz="0.030211 -0.015926 4.7238E-07" rpy="0 0 0" />
+      <mass value="0.26957" />
+      <inertia ixx="0.00020169" ixy="7.0404E-05" ixz="2.0546E-09" iyy="0.00029273" iyz="1.5E-09" izz="0.00025789" />
+    </inertial>
+  </link>
+  <joint name="FAR_ABAD_JOINT" type="revolute">
+    <origin xyz="0.272 -0.065 0.0002" rpy="0 0 0" />
+    <parent link="BASE_LINK" />
+    <child link="FAR_ABAD_LINK" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.697" upper="0.523" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FAR_HIP_LINK">
+    <inertial>
+      <origin xyz="0.000248 -0.054095 -0.124371" rpy="0 0 0" />
+      <mass value="2.6525" />
+      <inertia ixx="0.042044" ixy="-0.000008" ixz="-0.000080" iyy="0.041643" iyz="-0.005443" izz="0.002984" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.06 -0.125" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.03 0.15" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FAR_HIP_JOINT" type="revolute">
+    <origin xyz="0.0575 -0.039 0" rpy="0 0 0" />
+    <parent link="FAR_ABAD_LINK" />
+    <child link="FAR_HIP_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.443" upper="2.443" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FAR_KNEE_LINK">
+    <inertial>
+      <origin xyz="9.0281E-05 -0.024369 -0.17395" rpy="0 0 0" />
+      <mass value="1.5888" />
+      <inertia ixx="0.022185" ixy="-0.000003" ixz="0.000012" iyy="0.022093" iyz="-0.000132" izz="0.001572" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.0 -0.01 -0.14" rpy="0 -0.0 0" />
+      <geometry>
+        <box size="0.04 0.04 0.17" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.01 -0.28" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.03" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FAR_KNEE_JOINT" type="revolute">
+    <origin xyz="0 -0.0442 -0.26" rpy="0 0 0" />
+    <parent link="FAR_HIP_LINK" />
+    <child link="FAR_KNEE_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.801" upper="2.801" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FAR_FOOT_LINK">
+    <inertial>
+      <origin xyz="-0.000000 -0.007766 -1.0061E-06" rpy="0 0 0" />
+      <mass value="0.68796" />
+      <inertia ixx="0.0022048" ixy="1.0664E-10" ixz="1.131E-06" iyy="0.0041699" iyz="7.6444E-11" izz="0.0022106" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FAR_FOOT_JOINT" type="revolute">
+    <origin xyz="0 -0.0592 -0.28" rpy="0 0 0" />
+    <parent link="FAR_KNEE_LINK" />
+    <child link="FAR_FOOT_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-99999" upper="99999" effort="28" velocity="110" />
+  </joint>
+  <link name="FBL_ABAD_LINK">
+    <inertial>
+      <origin xyz="0.030211 0.015926 2.3073E-06" rpy="0 0 0" />
+      <mass value="0.26957" />
+      <inertia ixx="0.00020169" ixy="-7.0404E-05" ixz="1.4342E-08" iyy="0.00029273" iyz="7.5809E-09" izz="0.00025789" />
+    </inertial>
+  </link>
+  <joint name="FBL_ABAD_JOINT" type="revolute">
+    <origin xyz="0.272 0.065 0.0002" rpy="0 0 0" />
+    <parent link="BASE_LINK" />
+    <child link="FBL_ABAD_LINK" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.523" upper="0.697" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FBL_HIP_LINK">
+    <inertial>
+      <origin xyz="-0.00024776 0.054095 -0.12437" rpy="0 0 0" />
+      <mass value="2.6525" />
+      <inertia ixx="0.042044" ixy="-0.000008" ixz="0.000080" iyy="0.041643" iyz="0.005443" izz="0.002984" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.06 -0.125" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.03 0.15" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FBL_HIP_JOINT" type="revolute">
+    <origin xyz="0.0575 0.039 0" rpy="0.00017453 0 0" />
+    <parent link="FBL_ABAD_LINK" />
+    <child link="FBL_HIP_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.443" upper="2.443" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FBL_KNEE_LINK">
+    <inertial>
+      <origin xyz="-9.0281E-05 0.024369 -0.17395" rpy="0 0 0" />
+      <mass value="1.5888" />
+      <inertia ixx="0.022185" ixy="-0.000003" ixz="-0.000012" iyy="0.022093" iyz="0.000132" izz="0.001572" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.0 0.01 -0.14" rpy="0 -0.0 0" />
+      <geometry>
+        <box size="0.04 0.04 0.17" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.01 -0.28" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.03" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FBL_KNEE_JOINT" type="revolute">
+    <origin xyz="0 0.0442 -0.26" rpy="0 0 0" />
+    <parent link="FBL_HIP_LINK" />
+    <child link="FBL_KNEE_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.801" upper="2.801" effort="180" velocity="16.75" />
+  </joint>
+  <link name="FBL_FOOT_LINK">
+    <inertial>
+      <origin xyz="2.0302E-07 0.007766 -1.006E-06" rpy="0 0 0" />
+      <mass value="0.68796" />
+      <inertia ixx="0.0022048" ixy="1.0716E-10" ixz="-1.131E-06" iyy="0.0041699" iyz="7.6787E-11" izz="0.0022106" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="FBL_FOOT_JOINT" type="revolute">
+    <origin xyz="0 0.0592 -0.28" rpy="0 0 0" />
+    <parent link="FBL_KNEE_LINK" />
+    <child link="FBL_FOOT_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-99999" upper="99999" effort="28" velocity="110" />
+  </joint>
+  <link name="RAR_ABAD_LINK">
+    <inertial>
+      <origin xyz="-0.030211 -0.015926 -4.7238E-07" rpy="0 0 0" />
+      <mass value="0.26957" />
+      <inertia ixx="0.00020169" ixy="-7.0404E-05" ixz="2.0546E-09" iyy="0.00029273" iyz="1.5E-09" izz="0.00025789" />
+    </inertial>
+  </link>
+  <joint name="RAR_ABAD_JOINT" type="revolute">
+    <origin xyz="-0.272 -0.065 0.0002" rpy="0 0 0" />
+    <parent link="BASE_LINK" />
+    <child link="RAR_ABAD_LINK" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.697" upper="0.523" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RAR_HIP_LINK">
+    <inertial>
+      <origin xyz="0.00024776 -0.054095 -0.12437" rpy="0 0 0" />
+      <mass value="2.6525" />
+      <inertia ixx="0.042044" ixy="-0.000008" ixz="-0.000080" iyy="0.041643" iyz="-0.005443" izz="0.002984" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.06 -0.125" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.03 0.15" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RAR_HIP_JOINT" type="revolute">
+    <origin xyz="-0.0575 -0.039 0" rpy="0 0 0" />
+    <parent link="RAR_ABAD_LINK" />
+    <child link="RAR_HIP_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.443" upper="2.443" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RAR_KNEE_LINK">
+    <inertial>
+      <origin xyz="9.0281E-05 -0.024369 -0.17395" rpy="0 0 0" />
+      <mass value="1.5888" />
+      <inertia ixx="0.022185" ixy="-0.000003" ixz="0.000012" iyy="0.022093" iyz="-0.000132" izz="0.001572" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.0 -0.01 -0.14" rpy="0 -0.0 0" />
+      <geometry>
+        <box size="0.04 0.04 0.17" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 -0.01 -0.28" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.03" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RAR_KNEE_JOINT" type="revolute">
+    <origin xyz="0 -0.0442 -0.26" rpy="0 0 0" />
+    <parent link="RAR_HIP_LINK" />
+    <child link="RAR_KNEE_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.801" upper="2.801" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RAR_FOOT_LINK">
+    <inertial>
+      <origin xyz="-2.0294E-07 -0.007766 -1.006E-06" rpy="0 0 0" />
+      <mass value="0.68796" />
+      <inertia ixx="0.0022048" ixy="1.0789E-10" ixz="1.131E-06" iyy="0.0041699" iyz="7.6641E-11" izz="0.0022106" />
+    </inertial>
+    <visual>
+      <origin xyz="0 -0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 -0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RAR_FOOT_JOINT" type="revolute">
+    <origin xyz="0 -0.0592 -0.28" rpy="0 0 0" />
+    <parent link="RAR_KNEE_LINK" />
+    <child link="RAR_FOOT_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-99999" upper="99999" effort="28" velocity="110" />
+  </joint>
+  <link name="RBL_ABAD_LINK">
+    <inertial>
+      <origin xyz="-0.030211 0.015926 0.000000" rpy="0 0 0" />
+      <mass value="0.26957" />
+      <inertia ixx="0.00020169" ixy="0.000070" ixz="0.000000" iyy="0.00029273" iyz="0.000000" izz="0.00025879" />
+    </inertial>
+  </link>
+  <joint name="RBL_ABAD_JOINT" type="revolute">
+    <origin xyz="-0.272 0.065 0.0002" rpy="0 0 0" />
+    <parent link="BASE_LINK" />
+    <child link="RBL_ABAD_LINK" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.523" upper="0.697" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RBL_HIP_LINK">
+    <inertial>
+      <origin xyz="-0.00024776 0.054095 -0.12437" rpy="0 0 0" />
+      <mass value="2.6525" />
+      <inertia ixx="0.042044" ixy="-0.000008" ixz="0.000080" iyy="0.041643" iyz="0.005443" izz="0.002984" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.04 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.06 -0.125" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.03 0.15" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RBL_HIP_JOINT" type="revolute">
+    <origin xyz="-0.0575 0.039 0" rpy="0 0 0" />
+    <parent link="RBL_ABAD_LINK" />
+    <child link="RBL_HIP_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.443" upper="2.443" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RBL_KNEE_LINK">
+    <inertial>
+      <origin xyz="-9.0281E-05 0.024369 -0.17395" rpy="0 0 0" />
+      <mass value="1.5888" />
+      <inertia ixx="0.022185" ixy="-0.000003" ixz="-0.000012" iyy="0.022093" iyz="0.000132" izz="0.001572" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.035 0" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.10" radius="0.04" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.0 0.01 -0.14" rpy="0 -0.0 0" />
+      <geometry>
+        <box size="0.04 0.04 0.17" />
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0.01 -0.28" rpy="1.57 0 0" />
+      <geometry>
+        <cylinder length="0.03" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RBL_KNEE_JOINT" type="revolute">
+    <origin xyz="0 0.0442 -0.26" rpy="0 0 0" />
+    <parent link="RBL_HIP_LINK" />
+    <child link="RBL_KNEE_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-2.801" upper="2.801" effort="180" velocity="16.75" />
+  </joint>
+  <link name="RBL_FOOT_LINK">
+    <inertial>
+      <origin xyz="2.0294E-07 0.007766 -1.006E-06" rpy="0 0 0" />
+      <mass value="0.68796" />
+      <inertia ixx="0.0022048" ixy="1.0789E-10" ixz="-1.131E-06" iyy="0.0041699" iyz="7.6642E-11" izz="0.0022106" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0.01 0" rpy="1.5707963267948966 0 0" />
+      <geometry>
+        <cylinder length="0.04" radius="0.095" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RBL_FOOT_JOINT" type="revolute">
+    <origin xyz="0 0.0592 -0.28" rpy="0 0 0" />
+    <parent link="RBL_KNEE_LINK" />
+    <child link="RBL_FOOT_LINK" />
+    <axis xyz="0 1 0" />
+    <limit lower="-99999" upper="99999" effort="28" velocity="110" />
+  </joint>
+  <link name="base_connector_link">
+    <inertial>
+      <origin xyz="-1.2500000e-02 0 -2.5000000e-03" rpy="0 0 0" />
+      <mass value="3.2036557e-01" />
+      <inertia ixx="7.0998350e-04" ixy="0" ixz="0" iyy="6.1403401e-04" iyz="0" izz="1.3206804e-03" />
+    </inertial>
+    <visual>
+      <origin xyz="-0.0125000 0 -0.00250000" rpy="0 0 0" />
+      <geometry>
+        <box size="0.145 0.163 0.005" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="-0.0125000 0 -0.00250000" rpy="0 0 0" />
+      <geometry>
+        <box size="0.145 0.163 0.005" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_connector_link_joint" type="fixed">
+    <origin xyz="-0.195000 0 0.0830000" rpy="0 0 3.141592654" />
+    <parent link="BASE_LINK" />
+    <child link="base_connector_link" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.618" upper="2.618" effort="100" velocity="10" />
+  </joint>
+  <link name="ROBOT_ARM_LINK0">
+    <inertial>
+      <origin xyz="-1.7004865e-03 1.0940902e-05 4.1319589e-02" rpy="0 0 0" />
+      <mass value="8.4262463e-01" />
+      <inertia ixx="9.1052522e-04" ixy="3.1278488e-06" ixz="-2.7854597e-05" iyy="9.2591094e-04" iyz="8.0306608e-06" izz="8.9189032e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.0475000" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.085" radius="0.037" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.0475000" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.085" radius="0.037" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="base_connector_link" />
+    <child link="ROBOT_ARM_LINK0" />
+  </joint>
+  <link name="ROBOT_ARM_LINK1">
+    <inertial>
+      <origin xyz="5.8925747e-04 -5.1577453e-03 5.1776592e-02" rpy="0 0 0" />
+      <mass value="9.5570837e-01" />
+      <inertia ixx="8.5645585e-04" ixy="-2.7271970e-05" ixz="-1.2904032e-06" iyy="7.0056564e-04" iyz="1.3825974e-05" izz="7.3326798e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.0547000" rpy="-1.570796327 0 0" />
+      <geometry>
+        <cylinder length="0.063" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.0547000" rpy="-1.570796327 0 0" />
+      <geometry>
+        <cylinder length="0.063" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT1" type="revolute">
+    <origin xyz="0 0 0.0872999" rpy="0 0 0" />
+    <parent link="ROBOT_ARM_LINK0" />
+    <child link="ROBOT_ARM_LINK1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.618" upper="2.618" effort="100" velocity="10" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK2">
+    <inertial>
+      <origin xyz="-1.6930938e-01 -3.7188568e-03 -2.6244375e-04" rpy="0 0 0" />
+      <mass value="7.9870059e-01" />
+      <inertia ixx="1.2840574e-03" ixy="-5.2321761e-04" ixz="5.1448127e-05" iyy="1.3053603e-02" iyz="2.6607157e-06" izz="1.2532609e-02" />
+    </inertial>
+    <visual>
+      <origin xyz="-0.175000 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.26 0.05 0.05" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="-0.175000 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.26 0.05 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT2" type="revolute">
+    <origin xyz="0 0 0.0547001" rpy="-1.570796327 0 0" />
+    <parent link="ROBOT_ARM_LINK1" />
+    <child link="ROBOT_ARM_LINK2" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="3.14" effort="100" velocity="10" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK3">
+    <inertial>
+      <origin xyz="1.5753115e-01 -2.7604013e-02 -7.0061078e-04" rpy="0 0 0" />
+      <mass value="1.8252601e+00" />
+      <inertia ixx="2.5713686e-03" ixy="6.8426641e-03" ixz="-1.0669188e-03" iyy="5.6722248e-02" iyz="1.3714948e-04" izz="5.7792870e-02" />
+    </inertial>
+    <visual>
+      <origin xyz="0.236863 -0.0500000 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.38 0.05 0.045" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.236863 -0.0500000 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.38 0.05 0.045" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT3" type="revolute">
+    <origin xyz="-0.349106 -0.0250000 0" rpy="0 0 0" />
+    <parent link="ROBOT_ARM_LINK2" />
+    <child link="ROBOT_ARM_LINK3" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.9671" upper="0" effort="100" velocity="10" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK4">
+    <inertial>
+      <origin xyz="6.9504945e-02 -2.1240713e-03 -3.7711583e-03" rpy="0 0 0" />
+      <mass value="5.3765576e-01" />
+      <inertia ixx="3.4623228e-04" ixy="7.5802111e-06" ixz="-9.0419336e-05" iyy="5.0908402e-04" iyz="4.0787102e-06" izz="4.7057345e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0750000 0 0" rpy="-1.570796327 0 0" />
+      <geometry>
+        <cylinder length="0.062" radius="0.0325" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.0750000 0 0" rpy="-1.570796327 0 0" />
+      <geometry>
+        <cylinder length="0.062" radius="0.0325" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT4" type="revolute">
+    <origin xyz="0.396863 -0.0500000 0" rpy="0 0 0" />
+    <parent link="ROBOT_ARM_LINK3" />
+    <child link="ROBOT_ARM_LINK4" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.57" upper="1.57" effort="100" velocity="10" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK5">
+    <inertial>
+      <origin xyz="6.7441127e-02 -3.9683859e-06 -4.3961475e-03" rpy="0 0 0" />
+      <mass value="5.2158646e-01" />
+      <inertia ixx="3.7515086e-04" ixy="2.3298889e-07" ixz="-1.1944875e-04" iyy="5.7731854e-04" iyz="-3.5904348e-07" izz="5.0906312e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0713479 0 0" rpy="0 1.570796327 0" />
+      <geometry>
+        <cylinder length="0.057" radius="0.0325" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.0713479 0 0" rpy="0 1.570796327 0" />
+      <geometry>
+        <cylinder length="0.057" radius="0.0325" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT5" type="revolute">
+    <origin xyz="0.0750000 0 0" rpy="-1.5708 0 0" />
+    <parent link="ROBOT_ARM_LINK4" />
+    <child link="ROBOT_ARM_LINK5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.57" upper="1.57" effort="100" velocity="10" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK6">
+    <inertial>
+      <origin xyz="4.7238969e-02 -1.5106950e-03 2.4332449e-02" rpy="0 0 0" />
+      <mass value="2.3713435e-01" />
+      <inertia ixx="1.7969362e-04" ixy="3.3112459e-06" ixz="-8.2103509e-05" iyy="2.9515774e-04" iyz="1.1045257e-06" izz="3.9211078e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.0125000" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.025" radius="0.032" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.0125000" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.025" radius="0.032" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT6" type="revolute">
+    <origin xyz="0.1 0 0" rpy="0 1.570796327 0" />
+    <parent link="ROBOT_ARM_LINK5" />
+    <child link="ROBOT_ARM_LINK6" />
+    <axis xyz="0 0 1" />
+    <limit lower="-6.28" upper="6.28" effort="100" velocity="5" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <link name="ROBOT_ARM_LINK7">
+    <inertial>
+      <origin xyz="5.8177104e-06 1.7036047e-05 3.7517415e-02" rpy="0 0 0" />
+      <mass value="4.6808367e-01" />
+      <inertia ixx="3.6180366e-04" ixy="-1.6787051e-07" ixz="1.3199112e-07" iyy="3.6189034e-04" iyz="3.8027738e-07" izz="1.5442618e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.08" radius="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="ROBOT_ARM_JOINT7" type="fixed">
+    <origin xyz="0 0 0.025" rpy="0 0 0" />
+    <parent link="ROBOT_ARM_LINK6" />
+    <child link="ROBOT_ARM_LINK7" />
+  </joint>
+</robot>

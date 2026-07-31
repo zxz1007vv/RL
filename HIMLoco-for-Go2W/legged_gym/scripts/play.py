@@ -207,11 +207,18 @@ def play(
     initial_support_xy = torch.mean(env.feet_pos[:, :, :2], dim=1).clone()
     initial_feet_xy = env.feet_pos[:, :, :2].clone()
 
-    leg_joint_mask = torch.ones(
-        env.num_dof, dtype=torch.bool, device=env.device
+    policy_dof_indices = getattr(
+        env,
+        "policy_dof_indices",
+        torch.arange(env.num_actions, dtype=torch.long, device=env.device),
     )
-    leg_joint_mask[env.wheel_indices] = False
-    leg_joint_indices = leg_joint_mask.nonzero(as_tuple=False).flatten()
+    policy_wheel_indices = getattr(env, "policy_wheel_indices", env.wheel_indices)
+    leg_action_mask = torch.ones(
+        env.num_actions, dtype=torch.bool, device=env.device
+    )
+    leg_action_mask[policy_wheel_indices] = False
+    leg_action_indices = leg_action_mask.nonzero(as_tuple=False).flatten()
+    leg_joint_indices = policy_dof_indices[leg_action_indices]
 
     metric_sums = {
         name: torch.zeros((), dtype=torch.float, device=env.device)
@@ -249,8 +256,13 @@ def play(
     # export policy as a jit module (used to run it from C++)
     if EXPORT_POLICY:
         path = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'policies')
+        load_experiment_name = getattr(
+            train_cfg.runner, "load_experiment_name", None
+        )
         checkpoint_root = os.path.join(
-            LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name
+            LEGGED_GYM_ROOT_DIR,
+            'logs',
+            load_experiment_name or train_cfg.runner.experiment_name,
         )
         checkpoint_path = get_load_path(
             checkpoint_root,
@@ -399,10 +411,11 @@ def play(
                 env.contact_forces[:, env.feet_indices, 2] < 5.0
             )
             torque_saturation = (
-                torch.abs(env.torques) >= 0.99 * env.torque_limits
+                torch.abs(env.torques[:, policy_dof_indices])
+                >= 0.99 * env.torque_limits[policy_dof_indices]
             )
             action_saturation = (
-                torch.abs(env.actions[:, leg_joint_indices])
+                torch.abs(env.actions[:, leg_action_indices])
                 >= 0.99 * float(env.cfg.normalization.clip_actions)
             )
             metric_sums["contact_loss"] += torch.sum(contact_loss)
@@ -489,7 +502,7 @@ def play(
     env_samples = evaluated_steps * env.num_envs
     wheel_samples = env_samples * len(env.feet_indices)
     leg_samples = env_samples * len(leg_joint_indices)
-    torque_samples = env_samples * env.num_dof
+    torque_samples = env_samples * len(policy_dof_indices)
 
     means = {
         name: scalar_sums[name] / env_samples

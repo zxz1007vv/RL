@@ -36,11 +36,13 @@ from legged_gym.envs.zgwt.zgwt_config import ZGWTRoughCfg, ZGWTRoughCfgPPO
 from .zgwt.zgwt_robot import Zgwt
 from legged_gym.envs.zgwt.zgwt_dance_config import ZGWTDanceCfg, ZGWTDanceCfgPPO
 from .zgwt.zgwt_dance_robot import ZgwtDance
-from legged_gym.envs.zgwt.zgwt_dance_pq_config import (
-    ZGWTDancePQCfg,
-    ZGWTDancePQCfgPPO,
+from legged_gym.envs.zgwt_arm import (
+    ZGWTDanceArmCfg,
+    ZGWTDanceArmCfgPPO,
+    ZGWTDanceArmStaticCfg,
+    ZGWTDanceArmStaticCfgPPO,
+    ZgwtDanceArm,
 )
-from .zgwt.zgwt_dance_pq_robot import ZgwtDancePQ
 
 import os
 
@@ -52,5 +54,14 @@ task_registry.register(
     "zgwt_dance", ZgwtDance, ZGWTDanceCfg(), ZGWTDanceCfgPPO()
 )
 task_registry.register(
-    "zgwt_dance_pq", ZgwtDancePQ, ZGWTDancePQCfg(), ZGWTDancePQCfgPPO()
+    "zgwt_dance_arm",
+    ZgwtDanceArm,
+    ZGWTDanceArmCfg(),
+    ZGWTDanceArmCfgPPO(),
+)
+task_registry.register(
+    "zgwt_dance_arm_static",
+    ZgwtDanceArm,
+    ZGWTDanceArmStaticCfg(),
+    ZGWTDanceArmStaticCfgPPO(),
 )

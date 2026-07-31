@@ -1,0 +1,115 @@
+schema_version: 2
+export_date: "2026-07-31"
+robot_name: zgwsarm
+
+frames:
+  base_link: BASE_LINK
+  arm_base_link: ROBOT_ARM_LINK0
+  controlled_end_link: ROBOT_ARM_LINK6
+  tool_link: ee_link
+  base_to_arm:
+    translation: [-0.195, 0.0, 0.083]
+    rotation_rpy: [0.0, 0.0, 3.141592654]
+  controlled_end_to_tool:
+    translation: [0.0, 0.0, 0.105]
+    rotation_rpy: [0.0, 0.0, 0.0]
+
+arm_joints:
+  names:
+    - ROBOT_ARM_JOINT1
+    - ROBOT_ARM_JOINT2
+    - ROBOT_ARM_JOINT3
+    - ROBOT_ARM_JOINT4
+    - ROBOT_ARM_JOINT5
+    - ROBOT_ARM_JOINT6
+  local_axes:
+    - [0.0, 0.0, 1.0]
+    - [0.0, 0.0, 1.0]
+    - [0.0, 0.0, 1.0]
+    - [0.0, 0.0, 1.0]
+    - [0.0, 0.0, 1.0]
+    - [0.0, 0.0, 1.0]
+  q_sign: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  zero_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  position_lower: [-2.618, 0.0, -2.9671, -1.57, -1.57, -6.28]
+  position_upper: [2.618, 3.14, 0.0, 1.57, 1.57, 6.28]
+
+simulation_home:
+  q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  hardware_verified: false
+  note: J2 和 J3 位于硬限位，只供 ArmStandV1 对齐当前 MuJoCo home。
+
+safe_static_pose_library:
+  file: config/robots/zgwsarm/arm_safe_static_poses.csv
+  candidate_file: config/robots/zgwsarm/arm_pose_candidates.csv
+  generated_candidate_count: 500
+  simulation_verified_pose_count: 344
+  hardware_verified_pose_count: 0
+  static_validation_duration_s: 2.0
+  simulation_sampler_requires:
+    simulation_verified: true
+    collision_checked: true
+    singularity_checked: true
+    minimum_joint_margin_rad: 0.15
+    minimum_jacobian_sigma: 0.02
+  hardware_sampler_requires:
+    hardware_verified: true
+  synthetic_pose_hardware_verified_default: false
+
+simulation_controller:
+  status: simulation_only
+  control_dt: 0.002
+  control_frequency_hz: 500.0
+  joint_control:
+    type: computed_torque_joint_impedance
+    equation: "tau = bias(q,dq) + M(q)*qdd_ref + Kp*(q_ref-q) + Kd*(dq_ref-dq)"
+    kp: [500.0, 500.0, 500.0, 500.0, 500.0, 500.0]
+    kd: [45.0, 45.0, 45.0, 45.0, 45.0, 45.0]
+    torque_limits: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    torque_rate_limits: [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0]
+    mujoco_gravity_compensation: true
+    isaac_gravity_compensation: true
+    isaac_bias_dynamics: recursive_newton_euler_from_urdf
+    isaac_mass_matrix_target_acceleration_feedforward: true
+    joint_impedance_outside_mass_matrix: true
+    base_angular_velocity_compensation: true
+    base_linear_and_angular_acceleration_feedforward: false
+    isaac_note: >
+      Isaac 不直接读取 MuJoCo qfrc_bias，而是根据组合 URDF 的质量、惯量、
+      安装外参、底盘姿态和角速度实时计算等价的机械臂偏置力与质量矩阵。
+      当前仓库没有 C++ 控制器源码，因此这是控制契约和模型参数层面的对齐，
+      不是逐行源码等价性声明。
+  target_limits:
+    locked_velocity: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+    manual_velocity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    acceleration: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+    velocity_filter_tau: 0.005
+  dynamic_validation:
+    duration_s: 5.0
+    maximum_reference_velocity_rad_s: 0.5
+    maximum_reference_acceleration_rad_s2: 2.0
+    maximum_torque_ratio: 0.187262
+    maximum_torque_rate_nm_s: 999.999939
+    final_tracking_error_rad: 0.010966
+    remaining_command_error_rad: 0.0
+    reset_count: 0
+    passed: true
+
+singularity:
+  joint_limit_margin_rad: 0.15
+  jacobian_sigma_soft: 0.02
+  jacobian_sigma_hard: 0.005
+  validate_complete_path: true
+
+mass_model:
+  dog_without_arm_and_connector_mass: 41.04532
+  arm_connector_and_tool_mass: 6.5071195
+  total_mass: 47.5524395
+
+policy_interface:
+  actor_history_observation_dim: 360
+  critic_observation_dim: 78
+  action_dim: 16
+  arm_state_in_actor_observation: false
+  arm_state_in_critic_observation: false
+  arm_state_in_estimator_input: false

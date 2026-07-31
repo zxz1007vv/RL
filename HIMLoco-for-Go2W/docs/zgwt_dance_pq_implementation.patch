@@ -1,0 +1,1858 @@
+diff --git a/HIMLoco-for-Go2W/legged_gym/envs/__init__.py b/HIMLoco-for-Go2W/legged_gym/envs/__init__.py
+index 83a9ea4..d2778f0 100644
+--- a/HIMLoco-for-Go2W/legged_gym/envs/__init__.py
++++ b/HIMLoco-for-Go2W/legged_gym/envs/__init__.py
+@@ -36,6 +36,11 @@ from legged_gym.envs.zgwt.zgwt_config import ZGWTRoughCfg, ZGWTRoughCfgPPO
+ from .zgwt.zgwt_robot import Zgwt
+ from legged_gym.envs.zgwt.zgwt_dance_config import ZGWTDanceCfg, ZGWTDanceCfgPPO
+ from .zgwt.zgwt_dance_robot import ZgwtDance
++from legged_gym.envs.zgwt.zgwt_dance_pq_config import (
++    ZGWTDancePQCfg,
++    ZGWTDancePQCfgPPO,
++)
++from .zgwt.zgwt_dance_pq_robot import ZgwtDancePQ
+ 
+ import os
+ 
+@@ -46,3 +51,6 @@ task_registry.register("zgwt", Zgwt, ZGWTRoughCfg(), ZGWTRoughCfgPPO())
+ task_registry.register(
+     "zgwt_dance", ZgwtDance, ZGWTDanceCfg(), ZGWTDanceCfgPPO()
+ )
++task_registry.register(
++    "zgwt_dance_pq", ZgwtDancePQ, ZGWTDancePQCfg(), ZGWTDancePQCfgPPO()
++)
+diff --git a/HIMLoco-for-Go2W/legged_gym/utils/task_registry.py b/HIMLoco-for-Go2W/legged_gym/utils/task_registry.py
+index 8c3a4c2..81bf8c3 100644
+--- a/HIMLoco-for-Go2W/legged_gym/utils/task_registry.py
++++ b/HIMLoco-for-Go2W/legged_gym/utils/task_registry.py
+@@ -149,10 +149,19 @@ class TaskRegistry():
+         resume = train_cfg.runner.resume
+         if resume:
+             # load previously trained model
+-            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
++            load_experiment_name = getattr(
++                train_cfg.runner, "load_experiment_name", None
++            )
++            if load_experiment_name:
++                load_root = os.path.join(
++                    LEGGED_GYM_ROOT_DIR, "logs", load_experiment_name
++                )
++            else:
++                load_root = log_root
++            resume_path = get_load_path(load_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
+             print(f"Loading model from: {resume_path}")
+             runner.load(resume_path)
+         return runner, train_cfg
+ 
+ # make global task registry
+-task_registry = TaskRegistry()
+\ No newline at end of file
++task_registry = TaskRegistry()
+diff --git a/legged_gym/envs/zgwt/zgwt_dance_pq_config.py b/legged_gym/envs/zgwt/zgwt_dance_pq_config.py
+new file mode 100644
+index 0000000..d12d445
+--- /dev/null
++++ b/legged_gym/envs/zgwt/zgwt_dance_pq_config.py
+@@ -0,0 +1,125 @@
++"""Isolated load-stand configuration for the ZGWT P/Q experiment."""
++
++from .zgwt_dance_config import ZGWTDanceCfg, ZGWTDanceCfgPPO
++
++
++class ZGWTDancePQCfg(ZGWTDanceCfg):
++    """Phase-A load stand task; actor/critic interfaces remain unchanged."""
++
++    class commands(ZGWTDanceCfg.commands):
++        mode_probabilities = [
++            1.0,
++            0.0, 0.0, 0.0, 0.0,
++            0.0, 0.0, 0.0, 0.0,
++            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
++        ]
++
++        class ranges:
++            lin_vel_x = [0.0, 0.0]
++            lin_vel_y = [0.0, 0.0]
++            body_yaw = [0.0, 0.0]
++            body_roll = [0.0, 0.0]
++            body_pitch = [0.0, 0.0]
++            body_height = [0.54, 0.54]
++
++    class domain_rand(ZGWTDanceCfg.domain_rand):
++        randomize_payload_mass = True
++        payload_mass_range = [0.0, 8.0]
++
++        randomize_com_displacement = True
++        com_displacement_range = [-0.05, 0.05]
++        com_displacement_is_offset = True
++
++        randomize_link_mass = False
++        randomize_friction = False
++        randomize_restitution = False
++        randomize_motor_strength = False
++        randomize_kp = False
++        randomize_kd = False
++        randomize_initial_joint_pos = False
++        randomize_initial_base_velocity = False
++        push_robots = False
++        disturbance = False
++        delay = False
++        observation_delay = False
++
++    class noise(ZGWTDanceCfg.noise):
++        add_noise = False
++
++    class pq:
++        enabled = True
++        shadow_mode = True
++        compensate_wheels = False
++
++        input_dim = 36
++        hidden_dims = [64]
++        feature_dim = 16
++        activation = "tanh"
++        feature_seed = 20260731
++        append_constant_bias_feature = True
++
++        joint_position_scale = 1.0
++        joint_velocity_scale = 0.05
++        joint_reference_scale = 1.0
++
++        filter_time_constant = 0.05
++        forgetting_rate = 5.0
++        adaptation_gain = 1.0e-3
++        weight_leak = 1.0e-4
++        m0_diag = [1.0] * 12
++
++        compensation_torque_ratio = 0.05
++        compensation_ramp_time = 1.5
++        max_weight_abs = 3.0
++        max_weight_update_abs = 0.5
++
++        freeze_during_ramp = True
++        freeze_on_reset = True
++        freeze_on_contact_loss = True
++        freeze_on_torque_saturation = True
++        freeze_on_excessive_tilt = True
++        excessive_tilt_threshold = 0.35
++        reset_weights_on_episode_reset = True
++
++        use_spectral_regularization = False
++        use_projection = False
++
++        # Evaluation-only exact overrides. None keeps the training randomization.
++        fixed_payload_mass = None
++        fixed_com_offset = None
++
++
++class ZGWTDancePQCfgPPO(ZGWTDanceCfgPPO):
++    """Low-rate joint fine-tuning after Phase-A PQ validation succeeds."""
++
++    class algorithm(ZGWTDanceCfgPPO.algorithm):
++        learning_rate = 2.5e-5
++        schedule = "fixed"
++        clip_param = 0.08
++        num_learning_epochs = 2
++        max_grad_norm = 0.5
++        entropy_coef = 0.0
++
++    class runner(ZGWTDanceCfgPPO.runner):
++        experiment_name = "ZGWT_DANCE_PQ"
++        run_name = "pq_load_stand_v1"
++        save_interval = 100
++        max_iterations = 1000
++
++        # Phase A does not run PPO updates: use play_zgwt_dance_pq.py first.
++        # For Phase B, the unchanged 360-D observation and 16-D action make the
++        # old actor/estimator shape-compatible. PQ changes the closed-loop
++        # dynamics, so retain actor/estimator while resetting critic and both
++        # optimizers. P/Q/W and filter states are runtime state and are not part
++        # of PPO checkpoints.
++        resume = True
++        reset_iteration_on_load = True
++        load_actor_only = True
++        load_optimizer = False
++
++        # Checkpoints are loaded from the original experiment while all new logs
++        # and checkpoints remain isolated under logs/ZGWT_DANCE_PQ.
++        load_experiment_name = "ZGWT_DANCE"
++        load_run = "Jul30_14-54-33_stage1v2"
++        checkpoint = 4750
++
+diff --git a/legged_gym/envs/zgwt/zgwt_dance_pq_robot.py b/legged_gym/envs/zgwt/zgwt_dance_pq_robot.py
+new file mode 100644
+index 0000000..aeb2551
+--- /dev/null
++++ b/legged_gym/envs/zgwt/zgwt_dance_pq_robot.py
+@@ -0,0 +1,301 @@
++"""Isolated ZGWT dance environment with a twelve-leg-joint PQ compensator."""
++
++import torch
++
++from .zgwt_dance_pq_config import ZGWTDancePQCfg
++from .zgwt_dance_robot import ZgwtDance
++from .zgwt_dance_utils import effective_actions, select_wheel_factors
++from .zgwt_pq_compensator import (
++    ZGWTPQCompensator,
++    export_pq_feature_network,
++)
++
++
++class ZgwtDancePQ(ZgwtDance):
++    """ZGWT load-stand task with substep-rate neural P/Q compensation."""
++
++    cfg: ZGWTDancePQCfg
++
++    def _init_buffers(self):
++        super()._init_buffers()
++        if self.cfg.control.control_type != "P":
++            raise ValueError("ZGWT dance PQ currently requires position-PD control")
++        if self.num_dof != 16 or len(self.wheel_indices) != 4:
++            raise ValueError("ZGWT dance PQ requires 16 DOFs including four wheels")
++
++        leg_mask = torch.ones(
++            self.num_dof, dtype=torch.bool, device=self.device
++        )
++        leg_mask[self.wheel_indices] = False
++        self.leg_indices = leg_mask.nonzero(as_tuple=False).flatten()
++        if self.leg_indices.numel() != ZGWTPQCompensator.LEG_DOF_COUNT:
++            raise ValueError("ZGWT dance PQ requires exactly twelve leg joints")
++        self.leg_dof_names = [self.dof_names[i] for i in self.leg_indices.tolist()]
++
++        self.pq_compensator = ZGWTPQCompensator(
++            self.num_envs, self.cfg.pq, self.device
++        )
++        q_ref = self.default_dof_pos[:, self.leg_indices].expand(
++            self.num_envs, -1
++        )
++        kp, kd = self._effective_leg_gains()
++        all_envs = torch.arange(
++            self.num_envs, dtype=torch.long, device=self.device
++        )
++        self.pq_compensator.reset(
++            all_envs,
++            self.dof_pos[:, self.leg_indices],
++            self.dof_vel[:, self.leg_indices],
++            q_ref,
++            self.default_dof_pos[:, self.leg_indices].expand(
++                self.num_envs, -1
++            ),
++            kp,
++            kd,
++        )
++        print(
++            "ZGWT PQ timing: "
++            f"policy_dt={self.dt:.6f}s, "
++            f"physics_dt={self.sim_params.dt:.6f}s, "
++            f"control_decimation={self.cfg.control.decimation}, "
++            f"pq_update_frequency={1.0 / self.sim_params.dt:.1f}Hz"
++        )
++        print("ZGWT PQ leg order:", self.leg_dof_names)
++
++    def step(self, actions):
++        """Latch a clipped leg reference once, then update PQ in each substep."""
++        masked = effective_actions(actions, self.wheel_indices)
++        clipped = torch.clamp(
++            masked,
++            -float(self.cfg.normalization.clip_actions),
++            float(self.cfg.normalization.clip_actions),
++        ).to(self.device)
++        q_ref = (
++            self.default_dof_pos[:, self.leg_indices]
++            + float(self.cfg.control.action_scale)
++            * clipped[:, self.leg_indices]
++        )
++        self.pq_compensator.begin_policy_step(q_ref, self.dt)
++        return super().step(masked)
++
++    def reset_idx(self, env_ids):
++        pq_metrics = {}
++        if hasattr(self, "pq_compensator") and len(env_ids) > 0:
++            pq_metrics = self.pq_compensator.episode_metrics(env_ids)
++
++        super().reset_idx(env_ids)
++
++        if not hasattr(self, "pq_compensator") or len(env_ids) == 0:
++            return
++        q_ref = self.default_dof_pos[:, self.leg_indices].expand(
++            self.num_envs, -1
++        )
++        kp, kd = self._effective_leg_gains()
++        self.pq_compensator.reset(
++            env_ids,
++            self.dof_pos[:, self.leg_indices],
++            self.dof_vel[:, self.leg_indices],
++            q_ref,
++            self.default_dof_pos[:, self.leg_indices].expand(
++                self.num_envs, -1
++            ),
++            kp,
++            kd,
++        )
++        if "episode" in self.extras:
++            self.extras["episode"].update(pq_metrics)
++
++    def _select_leg_factors(self, factors):
++        if factors.ndim != 2 or factors.shape[0] != self.num_envs:
++            raise RuntimeError("gain factors must have shape [num_envs, 1|num_dof]")
++        if factors.shape[1] == 1:
++            return factors
++        if factors.shape[1] == self.num_dof:
++            return factors[:, self.leg_indices]
++        raise RuntimeError("gain factors must have shape [num_envs, 1|num_dof]")
++
++    def _effective_leg_gains(self):
++        kp = self.p_gains[self.leg_indices].unsqueeze(0) * self._select_leg_factors(
++            self.Kp_factors
++        )
++        kd = self.d_gains[self.leg_indices].unsqueeze(0) * self._select_leg_factors(
++            self.Kd_factors
++        )
++        return kp.expand(self.num_envs, -1), kd.expand(self.num_envs, -1)
++
++    def _nominal_torques_before_clip_and_strength(self, actions):
++        """Reproduce the dance P controller before either torque clip."""
++        actions = effective_actions(actions, self.wheel_indices)
++        actions_scaled = actions * float(self.cfg.control.action_scale)
++        pos_actions_scaled = actions_scaled.clone()
++        pos_actions_scaled[:, self.wheel_indices] = 0.0
++        dof_error = self.default_dof_pos - self.dof_pos
++        dof_error = dof_error.clone()
++        dof_error[:, self.wheel_indices] = 0.0
++        vel_ref = torch.zeros_like(actions_scaled)
++
++        torques = (
++            self.p_gains
++            * self.Kp_factors
++            * (pos_actions_scaled + dof_error)
++            + self.d_gains
++            * self.Kd_factors
++            * (vel_ref - self.dof_vel)
++        )
++
++        wheel_error = (
++            self.wheel_park_targets - self.dof_pos[:, self.wheel_indices]
++        )
++        try:
++            wheel_kd_factors = select_wheel_factors(
++                self.Kd_factors, self.wheel_indices, self.num_dof
++            )
++        except ValueError as exc:
++            raise RuntimeError(str(exc)) from exc
++        torques[:, self.wheel_indices] = (
++            float(self.cfg.control.wheel_park_stiffness) * wheel_error
++            - float(self.cfg.control.wheel_park_damping)
++            * wheel_kd_factors
++            * self.dof_vel[:, self.wheel_indices]
++        )
++        return torques
++
++    def _compute_torques(self, actions):
++        # Mandatory exact disabled regression path: no duplicated approximation.
++        if not bool(self.cfg.pq.enabled):
++            self.pq_compensator.enabled = False
++            return super()._compute_torques(actions)
++
++        self.pq_compensator.enabled = True
++        self.pq_compensator.shadow_mode = bool(self.cfg.pq.shadow_mode)
++        nominal = self._nominal_torques_before_clip_and_strength(actions)
++        kp, kd = self._effective_leg_gains()
++        leg_strength = self._select_leg_factors(self.motor_strength_factors)
++        leg_nominal_physical = nominal[:, self.leg_indices] * leg_strength
++        torque_saturated = torch.any(
++            torch.abs(leg_nominal_physical)
++            >= 0.99 * self.torque_limits[self.leg_indices],
++            dim=1,
++        )
++        contact_ok = torch.all(
++            self.contact_forces[:, self.feet_indices, 2] >= 5.0, dim=1
++        )
++        roll, pitch = self._current_roll_pitch()
++        tilt = torch.maximum(torch.abs(roll), torch.abs(pitch))
++
++        tau_comp = self.pq_compensator.step(
++            q=self.dof_pos[:, self.leg_indices],
++            qd=self.dof_vel[:, self.leg_indices],
++            default_q=self.default_dof_pos[:, self.leg_indices].expand(
++                self.num_envs, -1
++            ),
++            kp=kp,
++            kd=kd,
++            torque_limits=self.torque_limits[self.leg_indices],
++            low_level_dt=float(self.sim_params.dt),
++            contact_ok=contact_ok,
++            torque_saturated=torque_saturated,
++            tilt=tilt,
++        )
++
++        # Shadow mode must reproduce the original physics path even if future
++        # experiments re-enable motor-strength randomization.
++        if bool(self.cfg.pq.shadow_mode):
++            return super()._compute_torques(actions)
++
++        nominal[:, self.leg_indices] += tau_comp
++        if self.motor_strength_factors.ndim != 2 or self.motor_strength_factors.shape[
++            0
++        ] != self.num_envs or self.motor_strength_factors.shape[1] not in (
++            1,
++            self.num_dof,
++        ):
++            raise RuntimeError(
++                "motor_strength_factors must have shape [num_envs, 1|num_dof]"
++            )
++        torques = nominal * self.motor_strength_factors
++        return torch.clamp(torques, -self.torque_limits, self.torque_limits)
++
++    def set_pq_mode(self, mode):
++        if mode not in ("off", "shadow", "active"):
++            raise ValueError("PQ mode must be 'off', 'shadow', or 'active'")
++        enabled = mode != "off"
++        shadow = mode == "shadow"
++        self.cfg.pq.enabled = enabled
++        self.cfg.pq.shadow_mode = shadow
++        self.pq_compensator.enabled = enabled
++        self.pq_compensator.shadow_mode = shadow
++
++    def export_pq_features(self, path):
++        return export_pq_feature_network(self.pq_compensator, path)
++
++    def _process_rigid_body_props(self, props, env_id):
++        nominal_com = (
++            float(props[0].com.x),
++            float(props[0].com.y),
++            float(props[0].com.z),
++        )
++        if env_id == 0:
++            self._pq_nominal_base_com = nominal_com
++        props = super()._process_rigid_body_props(props, env_id)
++
++        fixed_payload = getattr(self.cfg.pq, "fixed_payload_mass", None)
++        if fixed_payload is not None:
++            payload = float(fixed_payload)
++            if payload < 0.0:
++                raise ValueError("fixed_payload_mass must be non-negative")
++            props[0].mass = float(self.default_rigid_body_mass[0]) + payload
++            self.payload[env_id, 0] = payload
++
++        fixed_com = getattr(self.cfg.pq, "fixed_com_offset", None)
++        if fixed_com is not None:
++            if len(fixed_com) != 3:
++                raise ValueError("fixed_com_offset must contain x, y, z")
++            from isaacgym import gymapi
++
++            props[0].com = gymapi.Vec3(
++                nominal_com[0] + float(fixed_com[0]),
++                nominal_com[1] + float(fixed_com[1]),
++                nominal_com[2] + float(fixed_com[2]),
++            )
++            self.com_displacement[env_id] = torch.tensor(
++                fixed_com, dtype=torch.float, device=self.device
++            )
++        return props
++
++    def set_payload_mass_and_com(self, payload_mass, com_offset=None, env_ids=None):
++        """Apply a true runtime base mass/COM step for Phase-A evaluation."""
++        if payload_mass < 0.0:
++            raise ValueError("payload_mass must be non-negative")
++        if com_offset is not None and len(com_offset) != 3:
++            raise ValueError("com_offset must contain x, y, z")
++        if env_ids is None:
++            env_ids = range(self.num_envs)
++        nominal_com = self._pq_nominal_base_com
++        from isaacgym import gymapi
++
++        for env_id in env_ids:
++            env_id = int(env_id)
++            props = self.gym.get_actor_rigid_body_properties(
++                self.envs[env_id], self.actor_handles[env_id]
++            )
++            props[0].mass = (
++                float(self.default_rigid_body_mass[0]) + float(payload_mass)
++            )
++            if com_offset is not None:
++                props[0].com = gymapi.Vec3(
++                    nominal_com[0] + float(com_offset[0]),
++                    nominal_com[1] + float(com_offset[1]),
++                    nominal_com[2] + float(com_offset[2]),
++                )
++            self.gym.set_actor_rigid_body_properties(
++                self.envs[env_id],
++                self.actor_handles[env_id],
++                props,
++                recomputeInertia=True,
++            )
++            self.payload[env_id, 0] = float(payload_mass)
++            if com_offset is not None:
++                self.com_displacement[env_id] = torch.tensor(
++                    com_offset, dtype=torch.float, device=self.device
++                )
+diff --git a/legged_gym/envs/zgwt/zgwt_pq_compensator.py b/legged_gym/envs/zgwt/zgwt_pq_compensator.py
+new file mode 100644
+index 0000000..ba643ef
+--- /dev/null
++++ b/legged_gym/envs/zgwt/zgwt_pq_compensator.py
+@@ -0,0 +1,685 @@
++"""GPU-parallel simplified neural P/Q composite adaptive compensation.
++
++This module deliberately has no Isaac Gym dependency so its tensor dynamics can
++be unit-tested on CPU.  The fixed feature network is shared by all environments;
++P, Q, W_hat and all filter/reference states are per-environment runtime state.
++
++The elementwise weight clamps below are engineering safety guards.  They are not
++the spectral-norm projection operator from the full paper and do not provide the
++paper's complete projection-based stability guarantees.
++"""
++
++import math
++import os
++from typing import Dict, Optional
++
++import torch
++from torch import nn
++
++
++def _cfg_value(cfg, name):
++    if not hasattr(cfg, name):
++        raise ValueError(f"missing PQ configuration field: {name}")
++    return getattr(cfg, name)
++
++
++class FixedPQFeatureNetwork(nn.Module):
++    """Deterministically initialized MLP whose parameters never update."""
++
++    def __init__(
++        self,
++        input_dim: int,
++        hidden_dims,
++        feature_dim: int,
++        activation: str = "tanh",
++        seed: int = 0,
++    ):
++        super().__init__()
++        if input_dim <= 0 or feature_dim <= 0:
++            raise ValueError("input_dim and feature_dim must be positive")
++        hidden_dims = [int(width) for width in hidden_dims]
++        if any(width <= 0 for width in hidden_dims):
++            raise ValueError("all hidden_dims must be positive")
++        if activation.lower() != "tanh":
++            raise ValueError("the first PQ implementation supports activation='tanh'")
++
++        generator = torch.Generator(device="cpu")
++        generator.manual_seed(int(seed))
++        dims = [int(input_dim)] + hidden_dims + [int(feature_dim)]
++        layers = []
++        # nn.Linear initializes itself from the global RNG before we overwrite
++        # its parameters. Preserve that RNG so enabling PQ cannot perturb PPO or
++        # environment randomization streams.
++        global_rng_state = torch.random.get_rng_state()
++        try:
++            for in_features, out_features in zip(dims[:-1], dims[1:]):
++                layer = nn.Linear(in_features, out_features)
++                weight_bound = math.sqrt(6.0 / (in_features + out_features))
++                bias_bound = 1.0 / math.sqrt(in_features)
++                with torch.no_grad():
++                    layer.weight.copy_(
++                        torch.empty(
++                            out_features, in_features, dtype=torch.float32
++                        ).uniform_(
++                            -weight_bound, weight_bound, generator=generator
++                        )
++                    )
++                    layer.bias.copy_(
++                        torch.empty(out_features, dtype=torch.float32).uniform_(
++                            -bias_bound, bias_bound, generator=generator
++                        )
++                    )
++                layers.extend((layer, nn.Tanh()))
++        finally:
++            torch.random.set_rng_state(global_rng_state)
++        self.network = nn.Sequential(*layers)
++        self.input_dim = int(input_dim)
++        self.feature_dim = int(feature_dim)
++        self.activation_name = activation.lower()
++        self.feature_seed = int(seed)
++        self.requires_grad_(False)
++        self.eval()
++
++    def forward(self, inputs):
++        return self.network(inputs)
++
++
++class ZGWTPQCompensator:
++    """Simplified P/Q composite learner for twelve ZGWT leg joints."""
++
++    LEG_DOF_COUNT = 12
++
++    def __init__(
++        self,
++        num_envs: int,
++        cfg,
++        device,
++        dtype: torch.dtype = torch.float32,
++    ):
++        if num_envs <= 0:
++            raise ValueError("num_envs must be positive")
++        self.num_envs = int(num_envs)
++        self.cfg = cfg
++        self.device = torch.device(device)
++        self.dtype = dtype
++
++        self.enabled = bool(_cfg_value(cfg, "enabled"))
++        self.shadow_mode = bool(_cfg_value(cfg, "shadow_mode"))
++        self.compensate_wheels = bool(_cfg_value(cfg, "compensate_wheels"))
++        if self.compensate_wheels:
++            raise ValueError("the first PQ implementation compensates legs only")
++
++        self.input_dim = int(_cfg_value(cfg, "input_dim"))
++        if self.input_dim != 3 * self.LEG_DOF_COUNT:
++            raise ValueError("input_dim must be 36 for [q, qd, q_ref]")
++        self.base_feature_dim = int(_cfg_value(cfg, "feature_dim"))
++        self.append_bias = bool(
++            _cfg_value(cfg, "append_constant_bias_feature")
++        )
++        self.actual_feature_dim = self.base_feature_dim + int(self.append_bias)
++
++        self.filter_time_constant = float(
++            _cfg_value(cfg, "filter_time_constant")
++        )
++        self.forgetting_rate = float(_cfg_value(cfg, "forgetting_rate"))
++        self.adaptation_gain = float(_cfg_value(cfg, "adaptation_gain"))
++        self.weight_leak = float(_cfg_value(cfg, "weight_leak"))
++        self.compensation_torque_ratio = float(
++            _cfg_value(cfg, "compensation_torque_ratio")
++        )
++        self.compensation_ramp_time = float(
++            _cfg_value(cfg, "compensation_ramp_time")
++        )
++        self.max_weight_abs = float(_cfg_value(cfg, "max_weight_abs"))
++        self.max_weight_update_abs = float(
++            _cfg_value(cfg, "max_weight_update_abs")
++        )
++        self._validate_scalar_configuration()
++
++        m0 = torch.as_tensor(
++            _cfg_value(cfg, "m0_diag"), dtype=dtype, device=self.device
++        )
++        if m0.shape != (self.LEG_DOF_COUNT,) or not torch.all(m0 > 0):
++            raise ValueError("m0_diag must contain twelve positive values")
++        self.m0_diag = m0
++        self.m0_inv = 1.0 / m0
++
++        self.joint_position_scale = float(
++            _cfg_value(cfg, "joint_position_scale")
++        )
++        self.joint_velocity_scale = float(
++            _cfg_value(cfg, "joint_velocity_scale")
++        )
++        self.joint_reference_scale = float(
++            _cfg_value(cfg, "joint_reference_scale")
++        )
++        for name, value in (
++            ("joint_position_scale", self.joint_position_scale),
++            ("joint_velocity_scale", self.joint_velocity_scale),
++            ("joint_reference_scale", self.joint_reference_scale),
++        ):
++            if not math.isfinite(value) or value <= 0.0:
++                raise ValueError(f"{name} must be finite and positive")
++
++        self.feature_network = FixedPQFeatureNetwork(
++            input_dim=self.input_dim,
++            hidden_dims=_cfg_value(cfg, "hidden_dims"),
++            feature_dim=self.base_feature_dim,
++            activation=_cfg_value(cfg, "activation"),
++            seed=int(_cfg_value(cfg, "feature_seed")),
++        ).to(device=self.device, dtype=dtype)
++        self.feature_network.requires_grad_(False)
++
++        n, p, m = self.num_envs, self.actual_feature_dim, self.LEG_DOF_COUNT
++        zeros = lambda *shape: torch.zeros(
++            *shape, dtype=dtype, device=self.device, requires_grad=False
++        )
++        self.W_hat = zeros(n, p, m)
++        self.P = zeros(n, p, p)
++        self.Q = zeros(n, p, m)
++        self.e2_f = zeros(n, m)
++        self.H_f = zeros(n, m)
++        self.u_f = zeros(n, m)
++        self.phi_f = zeros(n, p)
++        self.last_q_ref = zeros(n, m)
++        self.q_ref = zeros(n, m)
++        self.qd_ref = zeros(n, m)
++        self.qd_ref_target = zeros(n, m)
++        self.reference_initialized = torch.zeros(
++            n, dtype=torch.bool, device=self.device
++        )
++        self.just_reset = torch.ones(n, dtype=torch.bool, device=self.device)
++        self.elapsed_time = zeros(n)
++
++        self.last_tau_comp = zeros(n, m)
++        self.last_tau_comp_used = zeros(n, m)
++        self.last_W_dot = zeros(n, p, m)
++        self.last_composite_error = zeros(n, p, m)
++        self.last_tracking_update = zeros(n, p, m)
++        self.last_blend = zeros(n)
++        self.last_freeze = torch.ones(n, dtype=torch.bool, device=self.device)
++        self.last_freeze_contact = torch.zeros_like(self.last_freeze)
++        self.last_freeze_saturation = torch.zeros_like(self.last_freeze)
++        self.last_freeze_tilt = torch.zeros_like(self.last_freeze)
++        self.last_nan_fault = torch.zeros_like(self.last_freeze)
++        self.nan_count = zeros(n)
++
++        self._metric_names = (
++            "pq_comp_torque_mean",
++            "pq_comp_torque_rms",
++            "pq_comp_torque_ratio",
++            "pq_weight_norm_mean",
++            "pq_weight_update_norm",
++            "pq_composite_error_norm",
++            "pq_tracking_update_norm",
++            "pq_P_trace",
++            "pq_P_frobenius_norm",
++            "pq_Q_frobenius_norm",
++            "pq_freeze_fraction",
++            "pq_freeze_contact",
++            "pq_freeze_saturation",
++            "pq_freeze_tilt",
++        )
++        self.metric_sums = {name: zeros(n) for name in self._metric_names}
++        self.metric_samples = zeros(n)
++        self.metric_comp_max = zeros(n)
++        self.metric_weight_max = zeros(n)
++
++    def _validate_scalar_configuration(self):
++        positive = (
++            ("filter_time_constant", self.filter_time_constant),
++            ("forgetting_rate", self.forgetting_rate),
++            ("adaptation_gain", self.adaptation_gain),
++            ("max_weight_abs", self.max_weight_abs),
++            ("max_weight_update_abs", self.max_weight_update_abs),
++        )
++        for name, value in positive:
++            if not math.isfinite(value) or value <= 0.0:
++                raise ValueError(f"{name} must be finite and positive")
++        if not math.isfinite(self.weight_leak) or self.weight_leak < 0.0:
++            raise ValueError("weight_leak must be finite and non-negative")
++        if not 0.0 <= self.compensation_torque_ratio <= 1.0:
++            raise ValueError("compensation_torque_ratio must be in [0, 1]")
++        if (
++            not math.isfinite(self.compensation_ramp_time)
++            or self.compensation_ramp_time < 0.0
++        ):
++            raise ValueError(
++                "compensation_ramp_time must be finite and non-negative"
++            )
++        if bool(_cfg_value(self.cfg, "use_spectral_regularization")):
++            raise ValueError("spectral regularization is reserved for a future version")
++        if bool(_cfg_value(self.cfg, "use_projection")):
++            raise ValueError("projection is reserved for a future version")
++
++    def _check_joint_tensor(self, name, value):
++        expected = (self.num_envs, self.LEG_DOF_COUNT)
++        if value.shape != expected:
++            raise ValueError(f"{name} must have shape {expected}, got {tuple(value.shape)}")
++
++    def _features(self, q, qd, q_ref, default_q):
++        q_input = (q - default_q) * self.joint_position_scale
++        qd_input = qd * self.joint_velocity_scale
++        q_ref_input = (q_ref - default_q) * self.joint_reference_scale
++        inputs = torch.cat((q_input, qd_input, q_ref_input), dim=-1)
++        phi = self.feature_network(inputs)
++        if self.append_bias:
++            phi = torch.cat(
++                (
++                    phi,
++                    torch.ones(
++                        self.num_envs,
++                        1,
++                        dtype=self.dtype,
++                        device=self.device,
++                    ),
++                ),
++                dim=-1,
++            )
++        return phi
++
++    @torch.no_grad()
++    def begin_policy_step(self, q_ref, policy_dt: float):
++        """Update q_ref once per actor step; never difference it per substep."""
++        self._check_joint_tensor("q_ref", q_ref)
++        if not math.isfinite(policy_dt) or policy_dt <= 0.0:
++            raise ValueError("policy_dt must be finite and positive")
++        finite = torch.isfinite(q_ref).all(dim=1)
++        valid_previous = (
++            finite
++            & self.reference_initialized
++            & torch.isfinite(self.last_q_ref).all(dim=1)
++        )
++        raw = torch.zeros_like(q_ref)
++        raw[valid_previous] = (
++            q_ref[valid_previous] - self.last_q_ref[valid_previous]
++        ) / float(policy_dt)
++        self.last_q_ref[finite] = q_ref[finite]
++        self.q_ref[finite] = q_ref[finite]
++        self.qd_ref_target[finite] = raw[finite]
++        self.qd_ref_target[~finite] = 0.0
++        self.reference_initialized[finite] = True
++
++    @torch.no_grad()
++    def reset(
++        self,
++        env_ids,
++        q,
++        qd,
++        q_ref,
++        default_q,
++        kp,
++        kd,
++    ):
++        """Reset selected runtime states and initialize filters from current input."""
++        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
++        if env_ids.numel() == 0:
++            return
++        for name, value in (
++            ("q", q),
++            ("qd", qd),
++            ("q_ref", q_ref),
++            ("default_q", default_q),
++            ("kp", kp),
++            ("kd", kd),
++        ):
++            self._check_joint_tensor(name, value)
++
++        if bool(_cfg_value(self.cfg, "reset_weights_on_episode_reset")):
++            self.W_hat[env_ids] = 0.0
++            self.P[env_ids] = 0.0
++            self.Q[env_ids] = 0.0
++
++        self.q_ref[env_ids] = q_ref[env_ids]
++        self.last_q_ref[env_ids] = q_ref[env_ids]
++        self.qd_ref[env_ids] = 0.0
++        self.qd_ref_target[env_ids] = 0.0
++        self.reference_initialized[env_ids] = True
++        self.elapsed_time[env_ids] = 0.0
++        self.just_reset[env_ids] = True
++
++        e1 = q - q_ref
++        e2 = qd
++        phi = self._features(q, qd, q_ref, default_q)
++        delta_hat = torch.einsum("bpm,bp->bm", self.W_hat, phi)
++        H = self.m0_inv * (-kp * e1 - kd * e2)
++        u = -delta_hat
++        self.e2_f[env_ids] = e2[env_ids]
++        self.H_f[env_ids] = H[env_ids]
++        self.u_f[env_ids] = u[env_ids]
++        self.phi_f[env_ids] = phi[env_ids]
++        self._clear_metrics(env_ids)
++        self.last_tau_comp[env_ids] = 0.0
++        self.last_tau_comp_used[env_ids] = 0.0
++
++    def _clear_metrics(self, env_ids):
++        for values in self.metric_sums.values():
++            values[env_ids] = 0.0
++        self.metric_samples[env_ids] = 0.0
++        self.metric_comp_max[env_ids] = 0.0
++        self.metric_weight_max[env_ids] = 0.0
++        self.nan_count[env_ids] = 0.0
++
++    @torch.no_grad()
++    def step(
++        self,
++        q,
++        qd,
++        default_q,
++        kp,
++        kd,
++        torque_limits,
++        low_level_dt: float,
++        contact_ok: Optional[torch.Tensor] = None,
++        torque_saturated: Optional[torch.Tensor] = None,
++        tilt: Optional[torch.Tensor] = None,
++    ):
++        """Run filters, P/Q/W adaptation, and return limited leg compensation."""
++        for name, value in (
++            ("q", q),
++            ("qd", qd),
++            ("default_q", default_q),
++            ("kp", kp),
++            ("kd", kd),
++        ):
++            self._check_joint_tensor(name, value)
++        if torque_limits.shape not in (
++            (self.LEG_DOF_COUNT,),
++            (self.num_envs, self.LEG_DOF_COUNT),
++        ):
++            raise ValueError("torque_limits must have shape [12] or [N, 12]")
++        if not math.isfinite(low_level_dt) or low_level_dt <= 0.0:
++            raise ValueError("low_level_dt must be finite and positive")
++
++        zeros_bool = torch.zeros(
++            self.num_envs, dtype=torch.bool, device=self.device
++        )
++        if contact_ok is None:
++            contact_ok = ~zeros_bool
++        if torque_saturated is None:
++            torque_saturated = zeros_bool
++        if tilt is None:
++            tilt = torch.zeros(
++                self.num_envs, dtype=self.dtype, device=self.device
++            )
++
++        if not self.enabled:
++            self.last_tau_comp.zero_()
++            self.last_tau_comp_used.zero_()
++            self.last_blend.zero_()
++            self.last_freeze[:] = True
++            return self.last_tau_comp_used
++
++        alpha = 1.0 - math.exp(
++            -float(low_level_dt) / self.filter_time_constant
++        )
++        self.qd_ref += alpha * (self.qd_ref_target - self.qd_ref)
++        e1 = q - self.q_ref
++        e2 = qd - self.qd_ref
++        phi = self._features(q, qd, self.q_ref, default_q)
++        delta_hat = torch.einsum("bpm,bp->bm", self.W_hat, phi)
++        H = self.m0_inv * (-kp * e1 - kd * e2)
++        u = -delta_hat
++
++        input_finite = (
++            torch.isfinite(q).all(dim=1)
++            & torch.isfinite(qd).all(dim=1)
++            & torch.isfinite(self.q_ref).all(dim=1)
++            & torch.isfinite(phi).all(dim=1)
++            & torch.isfinite(H).all(dim=1)
++        )
++        state_finite = (
++            torch.isfinite(self.W_hat).flatten(1).all(dim=1)
++            & torch.isfinite(self.P).flatten(1).all(dim=1)
++            & torch.isfinite(self.Q).flatten(1).all(dim=1)
++            & torch.isfinite(self.e2_f).all(dim=1)
++            & torch.isfinite(self.H_f).all(dim=1)
++            & torch.isfinite(self.u_f).all(dim=1)
++            & torch.isfinite(self.phi_f).all(dim=1)
++            & torch.isfinite(self.qd_ref).all(dim=1)
++            & torch.isfinite(self.qd_ref_target).all(dim=1)
++        )
++        nan_fault = ~(input_finite & state_finite)
++        if torch.any(nan_fault):
++            bad_ids = nan_fault.nonzero(as_tuple=False).flatten()
++            self.W_hat[bad_ids] = 0.0
++            self.P[bad_ids] = 0.0
++            self.Q[bad_ids] = 0.0
++            self.e2_f[bad_ids] = 0.0
++            self.H_f[bad_ids] = 0.0
++            self.u_f[bad_ids] = 0.0
++            self.phi_f[bad_ids] = 0.0
++            self.qd_ref[bad_ids] = 0.0
++            self.qd_ref_target[bad_ids] = 0.0
++            self.nan_count[bad_ids] += 1.0
++
++        valid = input_finite & state_finite
++        safe_e2 = torch.where(valid[:, None], e2, self.e2_f)
++        safe_H = torch.where(valid[:, None], H, self.H_f)
++        safe_u = torch.where(valid[:, None], u, self.u_f)
++        safe_phi = torch.where(valid[:, None], phi, self.phi_f)
++        self.e2_f += alpha * (safe_e2 - self.e2_f)
++        self.H_f += alpha * (safe_H - self.H_f)
++        self.u_f += alpha * (safe_u - self.u_f)
++        self.phi_f += alpha * (safe_phi - self.phi_f)
++        e2_f_dot = (safe_e2 - self.e2_f) / self.filter_time_constant
++        residual = e2_f_dot - self.H_f - self.u_f
++
++        phi_outer = torch.einsum("bi,bj->bij", self.phi_f, self.phi_f)
++        residual_outer = torch.einsum(
++            "bi,bj->bij", self.phi_f, residual
++        )
++        p_dot = (
++            -self.forgetting_rate * self.P
++            + self.forgetting_rate * phi_outer
++        )
++        q_dot = (
++            -self.forgetting_rate * self.Q
++            + self.forgetting_rate * residual_outer
++        )
++
++        ramp_incomplete = (
++            self.elapsed_time < self.compensation_ramp_time
++            if self.compensation_ramp_time > 0.0
++            else zeros_bool
++        )
++        freeze_contact = (
++            (~contact_ok)
++            if bool(_cfg_value(self.cfg, "freeze_on_contact_loss"))
++            else zeros_bool
++        )
++        freeze_saturation = (
++            torque_saturated
++            if bool(_cfg_value(self.cfg, "freeze_on_torque_saturation"))
++            else zeros_bool
++        )
++        freeze_tilt = (
++            tilt > float(_cfg_value(self.cfg, "excessive_tilt_threshold"))
++            if bool(_cfg_value(self.cfg, "freeze_on_excessive_tilt"))
++            else zeros_bool
++        )
++        freeze_reset = (
++            self.just_reset
++            if bool(_cfg_value(self.cfg, "freeze_on_reset"))
++            else zeros_bool
++        )
++        freeze_ramp = (
++            ramp_incomplete
++            if bool(_cfg_value(self.cfg, "freeze_during_ramp"))
++            else zeros_bool
++        )
++        freeze = (
++            freeze_contact
++            | freeze_saturation
++            | freeze_tilt
++            | freeze_reset
++            | freeze_ramp
++            | nan_fault
++        )
++        update_mask = (~freeze).to(self.dtype)
++        self.P += float(low_level_dt) * p_dot * update_mask[:, None, None]
++        self.Q += float(low_level_dt) * q_dot * update_mask[:, None, None]
++        self.P.copy_(0.5 * (self.P + self.P.transpose(-1, -2)))
++
++        composite_error = self.Q - torch.bmm(self.P, self.W_hat)
++        tracking_outer = torch.einsum("bi,bj->bij", safe_phi, safe_e2)
++        w_dot = (
++            self.adaptation_gain * (composite_error + tracking_outer)
++            - self.weight_leak * self.W_hat
++        )
++        w_dot.clamp_(
++            -self.max_weight_update_abs, self.max_weight_update_abs
++        )
++        w_dot *= update_mask[:, None, None]
++        self.W_hat += float(low_level_dt) * w_dot
++        self.W_hat.clamp_(-self.max_weight_abs, self.max_weight_abs)
++
++        delta_hat = torch.einsum("bpm,bp->bm", self.W_hat, safe_phi)
++        tau_comp = -self.m0_diag * delta_hat
++        limits = self.compensation_torque_ratio * torque_limits
++        tau_comp = torch.maximum(torch.minimum(tau_comp, limits), -limits)
++        if self.compensation_ramp_time > 0.0:
++            blend = torch.clamp(
++                self.elapsed_time / self.compensation_ramp_time, 0.0, 1.0
++            )
++        else:
++            blend = torch.ones_like(self.elapsed_time)
++        tau_used = blend[:, None] * tau_comp
++        if self.shadow_mode:
++            tau_used.zero_()
++        tau_used[nan_fault] = 0.0
++
++        self.last_tau_comp.copy_(tau_comp)
++        self.last_tau_comp_used.copy_(tau_used)
++        self.last_W_dot.copy_(w_dot)
++        self.last_composite_error.copy_(composite_error)
++        self.last_tracking_update.copy_(tracking_outer)
++        self.last_blend.copy_(blend)
++        self.last_freeze.copy_(freeze)
++        self.last_freeze_contact.copy_(freeze_contact)
++        self.last_freeze_saturation.copy_(freeze_saturation)
++        self.last_freeze_tilt.copy_(freeze_tilt)
++        self.last_nan_fault.copy_(nan_fault)
++        self._accumulate_metrics(torque_limits)
++        self.elapsed_time += float(low_level_dt)
++        self.just_reset.zero_()
++        return self.last_tau_comp_used
++
++    def _accumulate_metrics(self, torque_limits):
++        tau_abs = torch.abs(self.last_tau_comp)
++        weight_norm = torch.linalg.vector_norm(self.W_hat, dim=(1, 2))
++        values = {
++            "pq_comp_torque_mean": torch.mean(tau_abs, dim=1),
++            "pq_comp_torque_rms": torch.sqrt(
++                torch.mean(torch.square(self.last_tau_comp), dim=1)
++            ),
++            "pq_comp_torque_ratio": torch.max(
++                tau_abs / torch.clamp(torque_limits, min=1.0e-8), dim=1
++            ).values,
++            "pq_weight_norm_mean": weight_norm,
++            "pq_weight_update_norm": torch.linalg.vector_norm(
++                self.last_W_dot, dim=(1, 2)
++            ),
++            "pq_composite_error_norm": torch.linalg.vector_norm(
++                self.last_composite_error, dim=(1, 2)
++            ),
++            "pq_tracking_update_norm": torch.linalg.vector_norm(
++                self.last_tracking_update, dim=(1, 2)
++            ),
++            "pq_P_trace": torch.diagonal(
++                self.P, dim1=-2, dim2=-1
++            ).sum(dim=1),
++            "pq_P_frobenius_norm": torch.linalg.vector_norm(
++                self.P, dim=(1, 2)
++            ),
++            "pq_Q_frobenius_norm": torch.linalg.vector_norm(
++                self.Q, dim=(1, 2)
++            ),
++            "pq_freeze_fraction": self.last_freeze.to(self.dtype),
++            "pq_freeze_contact": self.last_freeze_contact.to(self.dtype),
++            "pq_freeze_saturation": self.last_freeze_saturation.to(self.dtype),
++            "pq_freeze_tilt": self.last_freeze_tilt.to(self.dtype),
++        }
++        for name, value in values.items():
++            self.metric_sums[name] += value
++        self.metric_samples += 1.0
++        self.metric_comp_max = torch.maximum(
++            self.metric_comp_max, torch.max(tau_abs, dim=1).values
++        )
++        self.metric_weight_max = torch.maximum(
++            self.metric_weight_max, weight_norm
++        )
++
++    @torch.no_grad()
++    def episode_metrics(self, env_ids) -> Dict[str, torch.Tensor]:
++        """Return low-frequency aggregates, including P eigendiagnostics."""
++        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
++        if env_ids.numel() == 0:
++            return {}
++        denom = torch.clamp(self.metric_samples[env_ids], min=1.0)
++        result = {
++            "pq_enabled": torch.tensor(
++                float(self.enabled), device=self.device
++            ),
++            "pq_shadow_mode": torch.tensor(
++                float(self.shadow_mode), device=self.device
++            ),
++        }
++        for name, total in self.metric_sums.items():
++            result[name] = torch.mean(total[env_ids] / denom)
++        result["pq_comp_torque_max"] = torch.max(
++            self.metric_comp_max[env_ids]
++        )
++        result["pq_weight_norm_max"] = torch.max(
++            self.metric_weight_max[env_ids]
++        )
++        result["pq_nan_count"] = torch.sum(self.nan_count[env_ids])
++
++        # This is intentionally called at episode/report frequency, never in the
++        # physics loop.
++        symmetric_p = 0.5 * (
++            self.P[env_ids] + self.P[env_ids].transpose(-1, -2)
++        )
++        eigenvalues = torch.linalg.eigvalsh(symmetric_p)
++        min_eigenvalue = torch.min(eigenvalues, dim=1).values
++        max_eigenvalue = torch.max(eigenvalues, dim=1).values
++        condition = max_eigenvalue / torch.clamp(
++            min_eigenvalue, min=1.0e-8
++        )
++        result["pq_P_min_eigenvalue"] = torch.mean(min_eigenvalue)
++        result["pq_P_condition_estimate"] = torch.mean(condition)
++        return result
++
++
++def export_pq_feature_network(compensator: ZGWTPQCompensator, path: str):
++    """Save deterministic feature weights and deployment-relevant metadata."""
++    directory = os.path.dirname(os.path.abspath(path))
++    os.makedirs(directory, exist_ok=True)
++    cfg = compensator.cfg
++    payload = {
++        "format_version": 1,
++        "state_dict": {
++            key: value.detach().cpu()
++            for key, value in compensator.feature_network.state_dict().items()
++        },
++        "activation": compensator.feature_network.activation_name,
++        "input_dim": compensator.input_dim,
++        "hidden_dims": list(_cfg_value(cfg, "hidden_dims")),
++        "feature_dim": compensator.base_feature_dim,
++        "append_constant_bias_feature": compensator.append_bias,
++        "actual_feature_dim": compensator.actual_feature_dim,
++        "feature_seed": int(_cfg_value(cfg, "feature_seed")),
++        "input_normalization": {
++            "joint_position_scale": compensator.joint_position_scale,
++            "joint_velocity_scale": compensator.joint_velocity_scale,
++            "joint_reference_scale": compensator.joint_reference_scale,
++        },
++        "m0_diag": compensator.m0_diag.detach().cpu(),
++        "filter_time_constant": compensator.filter_time_constant,
++        "forgetting_rate": compensator.forgetting_rate,
++        "adaptation_gain": compensator.adaptation_gain,
++        "weight_leak": compensator.weight_leak,
++        "compensation_torque_ratio": compensator.compensation_torque_ratio,
++    }
++    torch.save(payload, path)
++    return path
+diff --git a/legged_gym/scripts/play_zgwt_dance_pq.py b/legged_gym/scripts/play_zgwt_dance_pq.py
+new file mode 100644
+index 0000000..d1832b8
+--- /dev/null
++++ b/legged_gym/scripts/play_zgwt_dance_pq.py
+@@ -0,0 +1,272 @@
++"""Phase-A baseline/shadow/active evaluation for ``zgwt_dance_pq``.
++
++Examples:
++  python legged_gym/scripts/play_zgwt_dance_pq.py --pq_mode off --payload_mass 4
++  python legged_gym/scripts/play_zgwt_dance_pq.py --pq_mode shadow --payload_mass 4
++  python legged_gym/scripts/play_zgwt_dance_pq.py --pq_mode active --payload_mass 4
++"""
++
++import argparse
++import os
++import sys
++
++import isaacgym  # noqa: F401 - must be imported before torch for Isaac Gym
++import torch
++
++from legged_gym import LEGGED_GYM_ROOT_DIR
++from legged_gym.envs import *  # noqa: F401,F403 - performs task registration
++from legged_gym.utils import export_policy_as_jit, get_args, task_registry
++
++
++def _parse_pq_args():
++    parser = argparse.ArgumentParser(add_help=False)
++    parser.add_argument(
++        "--pq_mode", choices=("off", "shadow", "active"), default="shadow"
++    )
++    parser.add_argument("--payload_mass", type=float, default=0.0)
++    parser.add_argument("--com_x", type=float, default=0.0)
++    parser.add_argument("--com_y", type=float, default=0.0)
++    parser.add_argument("--com_z", type=float, default=0.0)
++    parser.add_argument(
++        "--test", choices=("neutral", "stage1"), default="neutral"
++    )
++    parser.add_argument("--body_yaw", type=float, default=0.0)
++    parser.add_argument("--body_roll", type=float, default=0.0)
++    parser.add_argument("--body_pitch", type=float, default=0.0)
++    parser.add_argument("--body_height", type=float, default=0.54)
++    parser.add_argument("--duration", type=float, default=20.0)
++    parser.add_argument("--warmup", type=float, default=2.0)
++    parser.add_argument("--load_step_time", type=float)
++    parser.add_argument("--load_step_payload", type=float)
++    parser.add_argument("--export_pq_features", type=str)
++    parser.add_argument(
++        "--export_actor",
++        action="store_true",
++        help="Export the unchanged estimator+actor JIT beside the PQ weights.",
++    )
++    parser.add_argument(
++        "--asset_file",
++        type=str,
++        help="Optional URDF override, useful for headless no-visual smoke tests.",
++    )
++    pq_args, remaining = parser.parse_known_args()
++    sys.argv = [sys.argv[0]] + remaining
++    return pq_args
++
++
++def _mean(value):
++    return float(torch.mean(value).item())
++
++
++def play_pq(args, pq_args):
++    if args.task != "zgwt_dance_pq":
++        raise ValueError("play_zgwt_dance_pq.py requires --task zgwt_dance_pq")
++    if pq_args.payload_mass < 0.0:
++        raise ValueError("payload_mass must be non-negative")
++    if pq_args.duration <= 0.0 or pq_args.warmup < 0.0:
++        raise ValueError("duration must be positive and warmup non-negative")
++
++    env_cfg, train_cfg = task_registry.get_cfgs(args.task)
++    env_cfg.env.num_envs = min(
++        env_cfg.env.num_envs, args.num_envs if args.num_envs is not None else 50
++    )
++    env_cfg.terrain.mesh_type = "plane"
++    env_cfg.terrain.measure_heights = False
++    env_cfg.terrain.curriculum = False
++    env_cfg.domain_rand.randomize_initial_joint_pos = False
++    env_cfg.domain_rand.randomize_initial_base_velocity = False
++    env_cfg.domain_rand.push_robots = False
++    env_cfg.domain_rand.disturbance = False
++    env_cfg.domain_rand.delay = False
++    env_cfg.noise.add_noise = False
++    env_cfg.pq.enabled = pq_args.pq_mode != "off"
++    env_cfg.pq.shadow_mode = pq_args.pq_mode == "shadow"
++    env_cfg.pq.fixed_payload_mass = pq_args.payload_mass
++    env_cfg.pq.fixed_com_offset = [
++        pq_args.com_x,
++        pq_args.com_y,
++        pq_args.com_z,
++    ]
++    if pq_args.asset_file:
++        env_cfg.asset.file = os.path.abspath(pq_args.asset_file)
++
++    if pq_args.test == "stage1":
++        env_cfg.commands.ranges.body_yaw = [-0.025, 0.025]
++        env_cfg.commands.ranges.body_roll = [-0.08, 0.08]
++        env_cfg.commands.ranges.body_pitch = [-0.08, 0.08]
++        env_cfg.commands.ranges.body_height = [0.49, 0.54]
++
++    env, _ = task_registry.make_env(args.task, args=args, env_cfg=env_cfg)
++    env.set_pq_mode(pq_args.pq_mode)
++
++    train_cfg.runner.resume = True
++    train_cfg.runner.reset_iteration_on_load = False
++    runner, _ = task_registry.make_alg_runner(
++        env=env,
++        args=args,
++        train_cfg=train_cfg,
++        log_root=None,
++    )
++    policy = runner.get_inference_policy(device=env.device)
++
++    if pq_args.export_actor:
++        actor_export_dir = os.path.join(
++            LEGGED_GYM_ROOT_DIR,
++            "logs",
++            "ZGWT_DANCE_PQ",
++            "exported",
++            "policies",
++        )
++        actor_path = export_policy_as_jit(
++            runner.alg.actor_critic,
++            actor_export_dir,
++            filename="actor.pt",
++        )
++        print("Exported unchanged estimator+actor JIT:", actor_path)
++
++    if pq_args.export_pq_features:
++        feature_path = os.path.abspath(pq_args.export_pq_features)
++    else:
++        feature_path = os.path.join(
++            LEGGED_GYM_ROOT_DIR,
++            "logs",
++            "ZGWT_DANCE_PQ",
++            "exported",
++            "pq_feature_weights.pt",
++        )
++    print("Exported fixed PQ features:", env.export_pq_features(feature_path))
++
++    if pq_args.test == "neutral":
++        command = (0.0, 0.0, 0.0, 0.54)
++    else:
++        command = (
++            pq_args.body_yaw,
++            pq_args.body_roll,
++            pq_args.body_pitch,
++            pq_args.body_height,
++        )
++
++    def set_command():
++        yaw, roll, pitch, height = command
++        env.commands[:, :2] = 0.0
++        env.yaw_command_targets[:] = yaw
++        env.pose_command_targets[:, 0] = roll
++        env.pose_command_targets[:, 1] = pitch
++        env.pose_command_targets[:, 2] = height
++
++    set_command()
++    env.compute_observations()
++    obs = env.get_observations()
++    initial_base_xy = env.root_states[:, :2].clone()
++    initial_support_xy = torch.mean(env.feet_pos[:, :, :2], dim=1).clone()
++    initial_feet_xy = env.feet_pos[:, :, :2].clone()
++
++    names = (
++        "roll_error",
++        "pitch_error",
++        "yaw_error",
++        "height_error",
++        "base_xy_drift",
++        "support_xy_drift",
++        "feet_xy_drift",
++        "max_wheel_drift",
++        "torque_saturation",
++        "contact_loss",
++        "fall",
++    )
++    sums = {name: 0.0 for name in names}
++    samples = 0
++    total_steps = int(round((pq_args.warmup + pq_args.duration) / env.dt))
++    warmup_steps = int(round(pq_args.warmup / env.dt))
++    load_step_done = False
++
++    for step in range(total_steps):
++        set_command()
++        if (
++            not load_step_done
++            and pq_args.load_step_time is not None
++            and step * env.dt >= pq_args.load_step_time
++        ):
++            stepped_payload = (
++                pq_args.load_step_payload
++                if pq_args.load_step_payload is not None
++                else pq_args.payload_mass
++            )
++            env.set_payload_mass_and_com(
++                stepped_payload,
++                [pq_args.com_x, pq_args.com_y, pq_args.com_z],
++            )
++            load_step_done = True
++            print(
++                f"Applied true rigid-body payload step at {step * env.dt:.3f}s: "
++                f"{stepped_payload:.3f}kg"
++            )
++
++        with torch.inference_mode():
++            actions = policy(obs.detach())
++            obs, _, _, dones, _, _, _ = env.step(actions.detach())
++        if step < warmup_steps:
++            continue
++
++        roll, pitch = env._current_roll_pitch()
++        height = env._current_base_height()
++        wheel_drift = torch.norm(
++            env.feet_pos[:, :, :2] - initial_feet_xy, dim=2
++        )
++        values = {
++            "roll_error": torch.abs(env.commands[:, 3] - roll),
++            "pitch_error": torch.abs(env.commands[:, 4] - pitch),
++            "yaw_error": torch.abs(env._body_yaw_error()),
++            "height_error": torch.abs(env.commands[:, 5] - height),
++            "base_xy_drift": torch.norm(
++                env.root_states[:, :2] - initial_base_xy, dim=1
++            ),
++            "support_xy_drift": torch.norm(
++                torch.mean(env.feet_pos[:, :, :2], dim=1)
++                - initial_support_xy,
++                dim=1,
++            ),
++            "feet_xy_drift": torch.mean(wheel_drift, dim=1),
++            "max_wheel_drift": torch.max(wheel_drift, dim=1).values,
++            "torque_saturation": torch.mean(
++                (
++                    torch.abs(env.torques) >= 0.99 * env.torque_limits
++                ).float(),
++                dim=1,
++            ),
++            "contact_loss": torch.mean(
++                (
++                    env.contact_forces[:, env.feet_indices, 2] < 5.0
++                ).float(),
++                dim=1,
++            ),
++            "fall": dones.float(),
++        }
++        for name, value in values.items():
++            sums[name] += _mean(value)
++        samples += 1
++
++    divisor = max(samples, 1)
++    print("\n================ ZGWT DANCE PQ EVALUATION ================")
++    print(
++        f"mode={pq_args.pq_mode}, payload={pq_args.payload_mass:.3f}kg, "
++        f"COM=({pq_args.com_x:+.3f},{pq_args.com_y:+.3f},{pq_args.com_z:+.3f})m"
++    )
++    for name in names:
++        print(f"{name}: {sums[name] / divisor:.8f}")
++
++    all_envs = torch.arange(env.num_envs, device=env.device)
++    pq_metrics = env.pq_compensator.episode_metrics(all_envs)
++    print("\nPQ diagnostics")
++    for name in sorted(pq_metrics):
++        value = pq_metrics[name]
++        print(f"{name}: {float(value.item()):.8f}")
++    print("==========================================================")
++
++
++if __name__ == "__main__":
++    pq_cli_args = _parse_pq_args()
++    core_args = get_args()
++    if core_args.task == "aliengo":
++        core_args.task = "zgwt_dance_pq"
++    play_pq(core_args, pq_cli_args)
+diff --git a/legged_gym/tests/test_zgwt_pq_compensator.py b/legged_gym/tests/test_zgwt_pq_compensator.py
+new file mode 100644
+index 0000000..0a74ed4
+--- /dev/null
++++ b/legged_gym/tests/test_zgwt_pq_compensator.py
+@@ -0,0 +1,395 @@
++import importlib.util
++from pathlib import Path
++from types import SimpleNamespace
++import tempfile
++import unittest
++
++try:
++    import isaacgym  # Isaac Gym requires this import to precede torch.
++except Exception:
++    isaacgym = None
++import torch
++
++
++MODULE_PATH = (
++    Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_pq_compensator.py"
++)
++SPEC = importlib.util.spec_from_file_location("zgwt_pq_compensator", MODULE_PATH)
++PQ = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(PQ)
++
++FixedPQFeatureNetwork = PQ.FixedPQFeatureNetwork
++ZGWTPQCompensator = PQ.ZGWTPQCompensator
++
++
++def pq_cfg(**overrides):
++    values = dict(
++        enabled=True,
++        shadow_mode=False,
++        compensate_wheels=False,
++        input_dim=36,
++        hidden_dims=[64],
++        feature_dim=16,
++        activation="tanh",
++        feature_seed=20260731,
++        append_constant_bias_feature=True,
++        joint_position_scale=1.0,
++        joint_velocity_scale=0.05,
++        joint_reference_scale=1.0,
++        filter_time_constant=0.05,
++        forgetting_rate=5.0,
++        adaptation_gain=1.0e-3,
++        weight_leak=1.0e-4,
++        m0_diag=[1.0] * 12,
++        compensation_torque_ratio=0.05,
++        compensation_ramp_time=0.0,
++        max_weight_abs=3.0,
++        max_weight_update_abs=0.5,
++        freeze_during_ramp=False,
++        freeze_on_reset=False,
++        freeze_on_contact_loss=False,
++        freeze_on_torque_saturation=False,
++        freeze_on_excessive_tilt=False,
++        excessive_tilt_threshold=0.35,
++        reset_weights_on_episode_reset=True,
++        use_spectral_regularization=False,
++        use_projection=False,
++    )
++    values.update(overrides)
++    return SimpleNamespace(**values)
++
++
++class PQFixture:
++    def make_compensator(self, num_envs=3, **overrides):
++        comp = ZGWTPQCompensator(
++            num_envs=num_envs, cfg=pq_cfg(**overrides), device="cpu"
++        )
++        q = torch.zeros(num_envs, 12)
++        qd = torch.zeros_like(q)
++        q_ref = torch.zeros_like(q)
++        default = torch.zeros_like(q)
++        kp = torch.ones_like(q)
++        kd = torch.ones_like(q)
++        ids = torch.arange(num_envs)
++        comp.reset(ids, q, qd, q_ref, default, kp, kd)
++        comp.begin_policy_step(q_ref, 0.01)
++        return comp, q, qd, default, kp, kd
++
++    def step_once(self, comp, q, qd, default, kp, kd, **kwargs):
++        return comp.step(
++            q=q,
++            qd=qd,
++            default_q=default,
++            kp=kp,
++            kd=kd,
++            torque_limits=torch.full((12,), 100.0),
++            low_level_dt=0.002,
++            **kwargs,
++        )
++
++
++class TestFixedPQFeatures(unittest.TestCase):
++    def test_feature_network_shape_and_frozen_parameters(self):
++        network = FixedPQFeatureNetwork(36, [64], 16, "tanh", 7)
++        output = network(torch.zeros(5, 36))
++        self.assertEqual(tuple(output.shape), (5, 16))
++        self.assertTrue(all(not p.requires_grad for p in network.parameters()))
++
++    def test_fixed_seed_reproduces_identical_weights(self):
++        first = FixedPQFeatureNetwork(36, [64], 16, "tanh", 19)
++        second = FixedPQFeatureNetwork(36, [64], 16, "tanh", 19)
++        for first_value, second_value in zip(
++            first.state_dict().values(), second.state_dict().values()
++        ):
++            torch.testing.assert_close(first_value, second_value, rtol=0, atol=0)
++
++    def test_feature_construction_does_not_advance_global_rng(self):
++        torch.manual_seed(123)
++        expected = torch.rand(4)
++        torch.manual_seed(123)
++        FixedPQFeatureNetwork(36, [64], 16, "tanh", 19)
++        actual = torch.rand(4)
++        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
++
++
++class TestPQTensorDynamics(unittest.TestCase, PQFixture):
++    def test_state_shapes_and_environment_independence(self):
++        comp, *_ = self.make_compensator(4)
++        self.assertEqual(tuple(comp.W_hat.shape), (4, 17, 12))
++        self.assertEqual(tuple(comp.P.shape), (4, 17, 17))
++        self.assertEqual(tuple(comp.Q.shape), (4, 17, 12))
++        comp.W_hat[0, 0, 0] = 2.0
++        self.assertEqual(comp.W_hat[1, 0, 0].item(), 0.0)
++        # There is only one fixed feature module shared across the batch.
++        self.assertEqual(
++            len(list(comp.feature_network.parameters())),
++            len(list(comp.feature_network.network.parameters())),
++        )
++
++    def test_pq_and_composite_update_shapes(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(3)
++        qd[:] = 0.1
++        output = self.step_once(comp, q, qd, default, kp, kd)
++        self.assertEqual(tuple(output.shape), (3, 12))
++        self.assertEqual(tuple(comp.last_composite_error.shape), (3, 17, 12))
++        self.assertTrue(torch.isfinite(comp.P).all())
++        self.assertTrue(torch.isfinite(comp.Q).all())
++
++    def test_compensation_is_leg_only_and_wheels_stay_zero(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(2)
++        comp.W_hat[:, -1, :] = 1.0
++        leg_torque = self.step_once(comp, q, qd, default, kp, kd)
++        full = torch.zeros(2, 16)
++        leg_indices = torch.tensor([0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14])
++        wheel_indices = torch.tensor([3, 7, 11, 15])
++        full[:, leg_indices] = leg_torque
++        self.assertEqual(tuple(leg_torque.shape), (2, 12))
++        torch.testing.assert_close(full[:, wheel_indices], torch.zeros(2, 4))
++
++    def test_torque_limit_is_strict(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(
++            2, compensation_torque_ratio=0.05
++        )
++        comp.W_hat[:, -1, :] = 3.0
++        torque = self.step_once(comp, q, qd, default, kp, kd)
++        self.assertTrue(torch.all(torch.abs(torque) <= 5.0))
++
++    def test_shadow_and_disabled_output_zero(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(
++            2, shadow_mode=True
++        )
++        comp.W_hat[:, -1, :] = 1.0
++        torch.testing.assert_close(
++            self.step_once(comp, q, qd, default, kp, kd),
++            torch.zeros(2, 12),
++        )
++        comp.enabled = False
++        before = comp.W_hat.clone()
++        torch.testing.assert_close(
++            self.step_once(comp, q, qd, default, kp, kd),
++            torch.zeros(2, 12),
++        )
++        torch.testing.assert_close(comp.W_hat, before)
++
++    def test_reset_only_changes_selected_environment(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(3)
++        comp.W_hat[:] = 1.0
++        comp.P[:] = 2.0
++        comp.Q[:] = 3.0
++        comp.reset(torch.tensor([1]), q, qd, q, default, kp, kd)
++        self.assertEqual(torch.count_nonzero(comp.W_hat[1]).item(), 0)
++        self.assertGreater(torch.count_nonzero(comp.W_hat[0]).item(), 0)
++        self.assertGreater(torch.count_nonzero(comp.W_hat[2]).item(), 0)
++
++    def test_one_environment_does_not_update_another(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(2)
++        qd[0] = 1.0
++        qd[1] = 0.0
++        self.step_once(comp, q, qd, default, kp, kd)
++        self.assertGreater(torch.linalg.vector_norm(comp.W_hat[0]).item(), 0.0)
++        self.assertEqual(torch.linalg.vector_norm(comp.W_hat[1]).item(), 0.0)
++
++    def test_nan_input_safely_disables_affected_output(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(2)
++        comp.W_hat[:, -1, :] = 1.0
++        q[0, 0] = float("nan")
++        output = self.step_once(comp, q, qd, default, kp, kd)
++        torch.testing.assert_close(output[0], torch.zeros(12))
++        self.assertTrue(torch.isfinite(output[1]).all())
++        self.assertEqual(comp.nan_count[0].item(), 1.0)
++
++    def test_nan_internal_state_is_cleared(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(2)
++        comp.W_hat[0, 0, 0] = float("nan")
++        output = self.step_once(comp, q, qd, default, kp, kd)
++        torch.testing.assert_close(output[0], torch.zeros(12))
++        self.assertTrue(torch.isfinite(comp.W_hat).all())
++        self.assertTrue(torch.isfinite(comp.u_f).all())
++
++    def test_constant_positive_error_produces_opposing_torque(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(
++            1, adaptation_gain=0.1, weight_leak=0.0
++        )
++        for parameter in comp.feature_network.parameters():
++            parameter.zero_()
++        qd[:] = 0.5
++        kp.zero_()
++        kd.zero_()
++        torque = self.step_once(comp, q, qd, default, kp, kd)
++        self.assertTrue(torch.all(torque < 0.0))
++
++    def test_adaptation_gain_scales_update(self):
++        low, q, qd, default, kp, kd = self.make_compensator(
++            1, adaptation_gain=0.001, weight_leak=0.0
++        )
++        high, *_ = self.make_compensator(
++            1, adaptation_gain=0.01, weight_leak=0.0
++        )
++        qd[:] = 0.2
++        self.step_once(low, q, qd, default, kp, kd)
++        self.step_once(high, q, qd, default, kp, kd)
++        low_norm = torch.linalg.vector_norm(low.W_hat)
++        high_norm = torch.linalg.vector_norm(high.W_hat)
++        self.assertGreater(high_norm.item(), low_norm.item() * 9.9)
++
++    def test_weight_leak_decays_without_error(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(
++            1, adaptation_gain=1.0e-6, weight_leak=0.5
++        )
++        comp.W_hat[:] = 1.0
++        before = torch.linalg.vector_norm(comp.W_hat).item()
++        self.step_once(comp, q, qd, default, kp, kd)
++        after = torch.linalg.vector_norm(comp.W_hat).item()
++        self.assertLess(after, before)
++
++    def test_ramp_is_monotonic(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(
++            1,
++            compensation_ramp_time=0.006,
++            adaptation_gain=1.0e-9,
++            weight_leak=0.0,
++        )
++        comp.W_hat[:, -1, :] = 1.0
++        blends = []
++        for _ in range(5):
++            self.step_once(comp, q, qd, default, kp, kd)
++            blends.append(comp.last_blend.item())
++        self.assertEqual(blends[0], 0.0)
++        self.assertTrue(all(a <= b for a, b in zip(blends, blends[1:])))
++        self.assertAlmostEqual(blends[-1], 1.0, places=6)
++
++    def test_p_remains_symmetric(self):
++        comp, q, qd, default, kp, kd = self.make_compensator(2)
++        qd[:] = torch.randn_like(qd)
++        for _ in range(5):
++            self.step_once(comp, q, qd, default, kp, kd)
++        torch.testing.assert_close(comp.P, comp.P.transpose(-1, -2))
++
++    def test_feature_export_contains_deployment_contract(self):
++        comp, *_ = self.make_compensator(1)
++        with tempfile.TemporaryDirectory() as directory:
++            path = str(Path(directory) / "pq_feature_weights.pt")
++            PQ.export_pq_feature_network(comp, path)
++            exported = torch.load(path)
++        self.assertEqual(exported["input_dim"], 36)
++        self.assertEqual(exported["actual_feature_dim"], 17)
++        self.assertEqual(exported["activation"], "tanh")
++        self.assertEqual(tuple(exported["m0_diag"].shape), (12,))
++        self.assertIn("network.0.weight", exported["state_dict"])
++
++
++class TestPQValidation(unittest.TestCase):
++    def test_invalid_filter_time_constant(self):
++        with self.assertRaises(ValueError):
++            ZGWTPQCompensator(1, pq_cfg(filter_time_constant=0.0), "cpu")
++
++    def test_invalid_adaptation_forgetting_and_m0(self):
++        for overrides in (
++            {"adaptation_gain": 0.0},
++            {"forgetting_rate": 0.0},
++            {"m0_diag": [1.0] * 11},
++            {"m0_diag": [1.0] * 11 + [0.0]},
++        ):
++            with self.assertRaises(ValueError):
++                ZGWTPQCompensator(1, pq_cfg(**overrides), "cpu")
++
++
++class TestDancePQTorqueRegression(unittest.TestCase):
++    """Numerical controller regression without constructing an Isaac simulation."""
++
++    @classmethod
++    def setUpClass(cls):
++        try:
++            from legged_gym.envs.zgwt.zgwt_dance_robot import ZgwtDance
++            from legged_gym.envs.zgwt.zgwt_dance_pq_robot import ZgwtDancePQ
++        except Exception as exc:  # Isaac Gym is optional for pure tensor CI.
++            raise unittest.SkipTest(f"Isaac Gym controller import unavailable: {exc}")
++        cls.Dance = ZgwtDance
++        cls.DancePQ = ZgwtDancePQ
++
++    def make_robot(self, enabled, shadow, compensation=0.0):
++        robot = object.__new__(self.DancePQ)
++        robot.num_envs = 2
++        robot.num_dof = 16
++        robot.num_actions = 16
++        robot.device = "cpu"
++        robot.sim_params = SimpleNamespace(dt=0.002)
++        robot.wheel_indices = torch.tensor([3, 7, 11, 15])
++        robot.leg_indices = torch.tensor(
++            [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14]
++        )
++        robot.default_dof_pos = torch.zeros(1, 16)
++        robot.dof_pos = torch.linspace(-0.1, 0.1, 32).reshape(2, 16)
++        robot.dof_vel = torch.linspace(0.2, -0.2, 32).reshape(2, 16)
++        robot.p_gains = torch.tensor(
++            [90.0, 120.0, 120.0, 60.0] * 4
++        )
++        robot.d_gains = torch.tensor([1.0, 1.0, 1.0, 0.2] * 4)
++        robot.Kp_factors = torch.ones(2, 1)
++        robot.Kd_factors = torch.ones(2, 1)
++        robot.motor_strength_factors = torch.ones(2, 1)
++        robot.torque_limits = torch.full((16,), 180.0)
++        robot.wheel_park_targets = torch.zeros(2, 4)
++        robot.feet_indices = torch.tensor([3, 7, 11, 15])
++        robot.contact_forces = torch.zeros(2, 16, 3)
++        robot.contact_forces[:, robot.feet_indices, 2] = 50.0
++        robot.projected_gravity = torch.tensor([[0.0, 0.0, -1.0]]).repeat(2, 1)
++        robot.cfg = SimpleNamespace(
++            control=SimpleNamespace(
++                control_type="P",
++                action_scale=0.25,
++                vel_scale=10.0,
++                wheel_park_stiffness=25.0,
++                wheel_park_damping=2.5,
++            ),
++            pq=SimpleNamespace(enabled=enabled, shadow_mode=shadow),
++        )
++
++        class FakeCompensator:
++            def __init__(self):
++                self.enabled = enabled
++                self.shadow_mode = shadow
++
++            def step(self, **_kwargs):
++                return torch.full((2, 12), float(compensation))
++
++        robot.pq_compensator = FakeCompensator()
++        return robot
++
++    def test_disabled_torque_matches_original_to_float_precision(self):
++        robot = self.make_robot(enabled=False, shadow=False)
++        actions = torch.linspace(-0.3, 0.3, 32).reshape(2, 16)
++        original = self.Dance._compute_torques(robot, actions)
++        disabled = self.DancePQ._compute_torques(robot, actions)
++        torch.testing.assert_close(disabled, original, rtol=0, atol=0)
++
++    def test_shadow_matches_original_and_active_preserves_wheel_park(self):
++        actions = torch.zeros(2, 16)
++        shadow_robot = self.make_robot(
++            enabled=True, shadow=True, compensation=1.0
++        )
++        original = self.Dance._compute_torques(shadow_robot, actions)
++        shadow = self.DancePQ._compute_torques(shadow_robot, actions)
++        torch.testing.assert_close(shadow, original, rtol=0, atol=0)
++
++        active_robot = self.make_robot(
++            enabled=True, shadow=False, compensation=1.0
++        )
++        active_original = self.Dance._compute_torques(active_robot, actions)
++        active = self.DancePQ._compute_torques(active_robot, actions)
++        torch.testing.assert_close(
++            active[:, active_robot.wheel_indices],
++            active_original[:, active_robot.wheel_indices],
++            rtol=0,
++            atol=0,
++        )
++        self.assertFalse(
++            torch.equal(
++                active[:, active_robot.leg_indices],
++                active_original[:, active_robot.leg_indices],
++            )
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -470,7 +470,20 @@ class LeggedRobot(BaseTask):
             props[0].mass = self.default_rigid_body_mass[0] + self.payload[env_id, 0]
             
         if self.cfg.domain_rand.randomize_com_displacement:
-            props[0].com = gymapi.Vec3(self.com_displacement[env_id, 0], self.com_displacement[env_id, 1], self.com_displacement[env_id, 2])
+            sampled_com = self.com_displacement[env_id]
+            if getattr(
+                self.cfg.domain_rand, "com_displacement_is_offset", False
+            ):
+                nominal_com = props[0].com
+                props[0].com = gymapi.Vec3(
+                    nominal_com.x + sampled_com[0],
+                    nominal_com.y + sampled_com[1],
+                    nominal_com.z + sampled_com[2],
+                )
+            else:
+                props[0].com = gymapi.Vec3(
+                    sampled_com[0], sampled_com[1], sampled_com[2]
+                )
 
         if self.cfg.domain_rand.randomize_link_mass:
             rng = self.cfg.domain_rand.link_mass_range
@@ -563,13 +576,22 @@ class LeggedRobot(BaseTask):
 
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments
-        Positions are randomly selected within 0.5:1.5 x default positions.
+        Positions optionally use the configured multiplier around defaults.
         Velocities are set to zero.
 
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
+        if self.cfg.domain_rand.randomize_initial_joint_pos:
+            pos_range = self.cfg.domain_rand.initial_joint_pos_range
+            self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(
+                pos_range[0],
+                pos_range[1],
+                (len(env_ids), self.num_dof),
+                device=self.device,
+            )
+        else:
+            self.dof_pos[env_ids] = self.default_dof_pos
         self.dof_vel[env_ids] = 0.
 
         env_ids_int32 = env_ids.to(dtype=torch.int32)
@@ -592,7 +614,22 @@ class LeggedRobot(BaseTask):
             self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
         # base velocities
-        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        if getattr(
+            self.cfg.domain_rand, "randomize_initial_base_velocity", True
+        ):
+            vel_range = getattr(
+                self.cfg.domain_rand,
+                "initial_base_velocity_range",
+                [-0.5, 0.5],
+            )
+            self.root_states[env_ids, 7:13] = torch_rand_float(
+                vel_range[0],
+                vel_range[1],
+                (len(env_ids), 6),
+                device=self.device,
+            )
+        else:
+            self.root_states[env_ids, 7:13] = 0.0
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
@@ -745,7 +782,10 @@ class LeggedRobot(BaseTask):
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         if self.cfg.terrain.measure_heights:
             self.height_points = self._init_height_points()
-        self.measured_heights = self._get_heights()
+            self.measured_heights = self._get_heights()
+        else:
+            # Plane/blind tasks must not construct or access the 187-point scan.
+            self.measured_heights = None
         self.base_height_points = self._init_base_height_points()
 
         # joint positions offsets and PD gains

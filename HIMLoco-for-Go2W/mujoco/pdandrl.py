@@ -141,10 +141,19 @@ wheel_control = cfg.get("wheel_control", "velocity")
 wheel_park_damping = float(
     cfg.get("wheel_park_damping", d_gains[wheel_ids].mean().item())
 )
+wheel_park_stiffness = float(cfg.get("wheel_park_stiffness", 0.0))
+park_wheels_always = bool(cfg.get("park_wheels_always", False))
+rl_entry_blend_time = max(0.0, float(cfg.get("rl_entry_blend_time", 0.0)))
 commands_cfg = cfg.get("commands", {})
-pose_transition_time = max(
-    0.0, float(commands_cfg.get("transition_time", 0.0))
+command_filter_time_constant = max(
+    0.0,
+    float(
+        commands_cfg.get(
+            "filter_time_constant", commands_cfg.get("transition_time", 0.0)
+        )
+    ),
 )
+yaw_slew_rate = max(0.0, float(commands_cfg.get("yaw_slew_rate", 0.0)))
 command_mode = commands_cfg.get("mode", "heading")
 command_ranges = commands_cfg.get("ranges", {})
 command_deadband = float(commands_cfg.get("deadband", 0.05))
@@ -152,7 +161,6 @@ policy_command_names = commands_cfg.get(
     "policy_order", ["lin_vel_x", "lin_vel_y", "ang_vel_yaw"]
 )
 pose_defaults = commands_cfg.get("pose_defaults", {})
-dance_trajectory = commands_cfg.get("dance_trajectory", {})
 yaw_kp = commands_cfg.get("yaw_kp", cfg.get("yaw_kp", 2.5))
 
 scale_factors = cfg["scale_factors"]
@@ -208,9 +216,6 @@ def get_obs(actions, default_dof_pos, commands):
     default_command_scales = [
         sf["scale_lin_vel"], sf["scale_lin_vel"], sf["scale_ang_vel"]
     ]
-    commands_scale = torch.tensor(
-        commands_cfg.get("scales", default_command_scales), device=device
-    )
     base_quat = get_sensor_data("imu_quat")
     projected_gravity = world2self(base_quat, torch.tensor([0., 0., -1.], device=device))
     imu_gyro = get_sensor_data("imu_gyro")
@@ -227,13 +232,37 @@ def get_obs(actions, default_dof_pos, commands):
         dof_vel[i] = get_sensor_data(n + "_vel")[0]
 
     cmds = torch.tensor(commands, device=device)
+    normalization = commands_cfg.get("normalization")
+    if normalization is not None and len(commands) == 6:
+        normalized_commands = torch.zeros_like(cmds)
+        normalized_commands[2] = torch.clamp(
+            cmds[2] / float(normalization["max_abs_yaw"]), -1.0, 1.0
+        )
+        normalized_commands[3] = torch.clamp(
+            cmds[3] / float(normalization["max_abs_roll"]), -1.0, 1.0
+        )
+        normalized_commands[4] = torch.clamp(
+            cmds[4] / float(normalization["max_abs_pitch"]), -1.0, 1.0
+        )
+        default_height = float(normalization["default_height"])
+        crouch_span = default_height - float(normalization["min_height"])
+        normalized_commands[5] = torch.clamp(
+            (cmds[5] - default_height) / crouch_span, -1.0, 0.0
+        )
+    else:
+        commands_scale = torch.tensor(
+            commands_cfg.get("scales", default_command_scales), device=device
+        )
+        normalized_commands = cmds * commands_scale
+    effective_actions = actions.clone()
+    effective_actions[wheel_ids] = 0.0
     return torch.cat([
         imu_gyro * sf["scale_ang_vel"],
         projected_gravity,
-        cmds * commands_scale,
+        normalized_commands,
         (dof_pos - default_dof_pos) * sf["scale_dof_pos"],
         dof_vel * sf["scale_dof_vel"],
-        actions
+        effective_actions
     ], dim=-1)
 
 def clamp_command(value, name):
@@ -242,6 +271,14 @@ def clamp_command(value, name):
         return value
     return float(np.clip(value, limits[0], limits[1]))
 
+def get_current_yaw():
+    base_quat = get_sensor_data("imu_quat")
+    q_w, q_x, q_y, q_z = base_quat
+    return torch.atan2(
+        2 * (q_w * q_z + q_x * q_y),
+        1 - 2 * (q_y * q_y + q_z * q_z),
+    )
+
 def prepare_commands(raw_commands):
     commands = [
         clamp_command(raw_commands[0], "lin_vel_x"),
@@ -249,17 +286,20 @@ def prepare_commands(raw_commands):
         raw_commands[2],
     ]
     yaw_now = None
+    if command_mode in ("heading", "body_yaw"):
+        yaw_now = get_current_yaw()
     if command_mode == "heading":
-        base_quat = get_sensor_data("imu_quat")
-        q_w, q_x, q_y, q_z = base_quat
-        yaw_now = torch.atan2(2*(q_w*q_z + q_x*q_y), 1 - 2*(q_y*q_y + q_z*q_z))
         yaw_target = torch.tensor(commands[2], device=device, dtype=torch.float32)
         yaw_err = torch.atan2(torch.sin(yaw_target - yaw_now), torch.cos(yaw_target - yaw_now))
         commands[2] = clamp_command((yaw_kp * yaw_err).item(), "ang_vel_yaw")
+    elif command_mode == "body_yaw":
+        commands[2] = clamp_command(commands[2], "body_yaw")
     else:
         commands[2] = clamp_command(commands[2], "ang_vel_yaw")
 
-    if all(abs(command) < command_deadband for command in commands[:3]):
+    if command_mode != "body_yaw" and all(
+        abs(command) < command_deadband for command in commands[:3]
+    ):
         commands[:3] = [0.0, 0.0, 0.0]
 
     # Dance policies append [body_roll, body_pitch, body_height]. Input devices
@@ -288,8 +328,6 @@ def main():
     pd_target_dof_pos = pd_hold_dof_pos.clone()
     pd_transition_start = None
     pd_transition_elapsed = 0.0 if startup_enabled else pd_transition_time
-    trajectory_start_time = time.time()
-
     # load policy
     try:
         policy = torch.jit.load(paths["policy_path"])
@@ -317,6 +355,12 @@ def main():
         print("Keyboard fallback: 1 -> PD hold   2 -> RL")
 
     actions = torch.zeros(16, device=device)
+    yaw_command_state = torch.tensor(0.0, dtype=torch.float32, device=device)
+    body_yaw_reference = get_current_yaw().detach().clone()
+    wheel_park_target = torch.cat(
+        [get_sensor_data(joint_names[index] + "_pos") for index in wheel_ids]
+    ).to(device)
+    rl_entry_elapsed = 0.0
     pose_command_state = torch.tensor(
         [
             float(pose_defaults.get("body_roll", 0.0)),
@@ -330,6 +374,7 @@ def main():
     def initial_policy_commands():
         commands, _ = prepare_commands(get_cmd())
         if len(commands) >= 6:
+            commands[2] = 0.0
             commands[3:6] = pose_command_state.tolist()
         return commands
 
@@ -345,6 +390,7 @@ def main():
     def on_press(key):
         nonlocal actions, obs_buffer, pd_target_dof_pos, pd_transition_start
         nonlocal pd_transition_elapsed, keyboard_mode_request
+        nonlocal wheel_park_target, rl_entry_elapsed
         global control_mode
         try:
             pressed = key.char.lower()
@@ -360,6 +406,15 @@ def main():
                 print(" PD hold mode ......")
             elif pressed == '2' and policy is not None:
                 actions = torch.zeros(16, device=device)
+                yaw_command_state.zero_()
+                body_yaw_reference.copy_(get_current_yaw())
+                wheel_park_target = torch.cat(
+                    [
+                        get_sensor_data(joint_names[index] + "_pos")
+                        for index in wheel_ids
+                    ]
+                ).to(device)
+                rl_entry_elapsed = 0.0
                 pose_command_state[:] = torch.tensor(
                     [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                     device=device,
@@ -405,6 +460,10 @@ def main():
                     print("\nRL blocked: press A and wait until standing is complete")
                 elif policy is not None:
                     actions = torch.zeros(16, device=device)
+                    yaw_command_state.zero_()
+                    body_yaw_reference.copy_(get_current_yaw())
+                    wheel_park_target = dof_pos[wheel_ids].clone()
+                    rl_entry_elapsed = 0.0
                     pose_command_state[:] = torch.tensor(
                         [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                         device=device,
@@ -417,6 +476,10 @@ def main():
             elif not startup_enabled and mode_request == "rl":
                 if policy is not None:
                     actions = torch.zeros(16, device=device)
+                    yaw_command_state.zero_()
+                    body_yaw_reference.copy_(get_current_yaw())
+                    wheel_park_target = dof_pos[wheel_ids].clone()
+                    rl_entry_elapsed = 0.0
                     pose_command_state[:] = torch.tensor(
                         [0.0, 0.0, float(pose_defaults.get("body_height", 0.54))],
                         device=device,
@@ -444,28 +507,58 @@ def main():
             # rl control
             if control_mode == 2:
                 raw_commands = get_cmd()
-                if dance_trajectory.get("enabled", False) and len(policy_command_names) >= 6:
-                    elapsed = time.time() - trajectory_start_time
-                    frequency = float(dance_trajectory.get("frequency", 0.25))
-                    phase = 2.0 * np.pi * frequency * elapsed
-                    raw_commands = list(raw_commands[:3]) + [
-                        float(dance_trajectory.get("roll_amplitude", 0.15)) * np.sin(phase),
-                        float(dance_trajectory.get("pitch_amplitude", 0.12)) * np.sin(phase + np.pi / 2.0),
-                        float(dance_trajectory.get("height_center", 0.52))
-                        + float(dance_trajectory.get("height_amplitude", 0.06)) * np.sin(phase * 0.5),
-                    ]
                 commands, yaw_now = prepare_commands(raw_commands)
-                if len(commands) >= 6 and pose_transition_time > 0.0:
+                if len(commands) >= 6:
+                    yaw_target = torch.tensor(
+                        commands[2], dtype=torch.float32, device=device
+                    )
                     pose_target = torch.tensor(
                         commands[3:6], dtype=torch.float32, device=device
                     )
-                    control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
-                    alpha = min(control_dt / pose_transition_time, 1.0)
-                    pose_command_state[:] = torch.lerp(
-                        pose_command_state, pose_target, alpha
-                    )
+                    if command_filter_time_constant > 0.0:
+                        control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
+                        alpha = 1.0 - np.exp(
+                            -control_dt / command_filter_time_constant
+                        )
+                        pose_command_state[:] = torch.lerp(
+                            pose_command_state, pose_target, alpha
+                        )
+                    else:
+                        control_dt = m.opt.timestep * cfg["sim_steps_per_loop"]
+                        pose_command_state.copy_(pose_target)
+                    if yaw_slew_rate > 0.0:
+                        max_yaw_step = yaw_slew_rate * control_dt
+                        yaw_step = torch.clamp(
+                            yaw_target - yaw_command_state,
+                            min=-max_yaw_step,
+                            max=max_yaw_step,
+                        )
+                        yaw_command_state.add_(yaw_step)
+                    else:
+                        yaw_command_state.copy_(yaw_target)
+                    if command_mode == "body_yaw":
+                        relative_yaw = torch.atan2(
+                            torch.sin(yaw_now - body_yaw_reference),
+                            torch.cos(yaw_now - body_yaw_reference),
+                        )
+                        yaw_error = torch.atan2(
+                            torch.sin(yaw_command_state - relative_yaw),
+                            torch.cos(yaw_command_state - relative_yaw),
+                        )
+                        commands[2] = yaw_error.item()
+                    else:
+                        relative_yaw = None
+                        commands[2] = yaw_command_state.item()
                     commands[3:6] = pose_command_state.tolist()
-                status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}  wz={commands[2]:+4.1f}"
+                status = f"\rRL cmd: vx={commands[0]:+4.1f}  vy={commands[1]:+4.1f}"
+                if command_mode == "body_yaw":
+                    status += (
+                        f"  yaw_target={yaw_command_state.item():+4.2f}"
+                        f" yaw={relative_yaw.item():+4.2f}"
+                        f" yaw_err={commands[2]:+4.2f}"
+                    )
+                else:
+                    status += f"  wz={commands[2]:+4.1f}"
                 if len(commands) >= 6:
                     status += (
                         f"  roll={commands[3]:+4.2f} pitch={commands[4]:+4.2f}"
@@ -522,14 +615,30 @@ def main():
                 obs_now = torch.clip(obs_now, -100, 100)
                 obs_buffer = torch.cat([obs_now.unsqueeze(0), obs_buffer[:-1]], dim=0)
                 obs_seq = obs_buffer.flatten()
-                actions = policy(obs_seq)
+                policy_actions = policy(obs_seq)
+                if rl_entry_blend_time > 0.0:
+                    blend = min(rl_entry_elapsed / rl_entry_blend_time, 1.0)
+                    blend = blend * blend * (3.0 - 2.0 * blend)
+                else:
+                    blend = 1.0
+                actions = policy_actions * blend
+                actions[wheel_ids] = 0.0
+                rl_entry_elapsed += m.opt.timestep * cfg["sim_steps_per_loop"]
                 actions_scaled = actions * actions_scale
                 if wheel_control == "torque":
                     pos_actions_scaled = actions_scaled.clone()
                     pos_actions_scaled[wheel_ids] = 0.0
                     act = p_gains * (pos_actions_scaled + rl_dof_err) - d_gains * dof_vel
-                    if abs(commands[0]) < command_deadband and abs(commands[1]) < command_deadband and abs(commands[2]) < command_deadband:
-                        act[wheel_ids] = -wheel_park_damping * dof_vel[wheel_ids]
+                    if park_wheels_always or (
+                        abs(commands[0]) < command_deadband
+                        and abs(commands[1]) < command_deadband
+                        and abs(commands[2]) < command_deadband
+                    ):
+                        wheel_error = wheel_park_target - dof_pos[wheel_ids]
+                        act[wheel_ids] = (
+                            wheel_park_stiffness * wheel_error
+                            - wheel_park_damping * dof_vel[wheel_ids]
+                        )
                     else:
                         act[wheel_ids] = (
                             actions_scaled[wheel_ids] * p_gains[wheel_ids]
@@ -539,7 +648,11 @@ def main():
                     actions_scaled[wheel_ids] = 0.0
                     vel_ref = torch.zeros_like(actions_scaled)
                     vel_ref[wheel_ids] = actions[wheel_ids] * vel_scale
-                    if abs(commands[0]) < command_deadband and abs(commands[1]) < command_deadband and abs(commands[2]) < command_deadband:
+                    if park_wheels_always or (
+                        abs(commands[0]) < command_deadband
+                        and abs(commands[1]) < command_deadband
+                        and abs(commands[2]) < command_deadband
+                    ):
                         vel_ref[wheel_ids] = 0.0
                     act = p_gains * (actions_scaled + rl_dof_err) + d_gains * (vel_ref - dof_vel)
                 apply_ctrl(act)

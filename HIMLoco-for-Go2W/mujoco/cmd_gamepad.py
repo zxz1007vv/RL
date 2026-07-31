@@ -24,8 +24,9 @@ class CmdGenerator:
     Dance command mapping:
     - left stick left/right: body roll
     - left stick up/down: body pitch
+    - right stick left/right: bounded body-yaw angle
     - right stick up/down: body height
-    - output: [0, 0, 0, body_roll, body_pitch, body_height]
+    - output: [0, 0, body_yaw, body_roll, body_pitch, body_height]
     """
 
     def __init__(self, cfg=None):
@@ -44,6 +45,9 @@ class CmdGenerator:
         self.max_vx = float(cfg.get("max_vx", 1.0))
         self.max_vy = float(cfg.get("max_vy", 0.5))
         self.max_yaw_rate = float(cfg.get("max_yaw_rate", 1.0))
+        self.max_body_yaw = float(
+            cfg.get("max_body_yaw", cfg.get("max_yaw_rate", 0.15))
+        )
         self.yaw_mode = cfg.get("yaw_mode", "heading")
         self.prefer_sdl_controller = bool(cfg.get("prefer_sdl_controller", True))
         self.axis_left_x = int(cfg.get("axis_left_x", 0))
@@ -55,7 +59,8 @@ class CmdGenerator:
         self.height_center = float(cfg.get("height_center", 0.54))
         self.height_range = float(cfg.get("height_range", 0.08))
         self.min_height = float(cfg.get("min_height", 0.40))
-        self.max_height = float(cfg.get("max_height", 0.58))
+        # Dance height is crouch-only unless a config explicitly opts out.
+        self.max_height = float(cfg.get("max_height", self.height_center))
         self.roll_sign = float(cfg.get("roll_sign", -1.0))
         self.pitch_sign = float(cfg.get("pitch_sign", -1.0))
         self.height_sign = float(cfg.get("height_sign", -1.0))
@@ -194,7 +199,7 @@ class CmdGenerator:
                 if self.command_profile == "dance":
                     self.vx = 0.0
                     self.vy = 0.0
-                    self.yaw_target = 0.0
+                    self.yaw_target = -right_x * self.max_body_yaw
                     self.body_roll = self.roll_sign * left_x * self.max_roll
                     self.body_pitch = self.pitch_sign * left_y * self.max_pitch
                     height = (
@@ -244,7 +249,7 @@ class CmdGenerator:
                 return [
                     0.0,
                     0.0,
-                    0.0,
+                    self.yaw_target,
                     self.body_roll,
                     self.body_pitch,
                     self.body_height,

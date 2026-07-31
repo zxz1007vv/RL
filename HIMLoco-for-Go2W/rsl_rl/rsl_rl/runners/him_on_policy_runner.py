@@ -80,6 +80,11 @@ class HIMOnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        # A checkpoint can be used either to resume the same run or to initialize
+        # a new manual training stage.  Keep the immediate parent checkpoint as
+        # provenance even when the new stage resets its local iteration counter.
+        self.parent_checkpoint_path = None
+        self.parent_checkpoint_iteration = None
 
         _, _ = self.env.reset()
     
@@ -139,13 +144,25 @@ class HIMOnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
                 
-            mean_value_loss, mean_surrogate_loss, mean_estimation_loss, mean_swap_loss = self.alg.update()
+            (
+                mean_value_loss,
+                mean_surrogate_loss,
+                mean_estimation_loss,
+                mean_swap_loss,
+                mean_approx_kl,
+                mean_clip_fraction,
+                mean_explained_variance,
+                mean_gradient_norm,
+            ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
                 self.log(locals())
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self.save(
+                    os.path.join(self.log_dir, 'model_{}.pt'.format(it)),
+                    iteration=it,
+                )
             ep_infos.clear()
         
         self.current_learning_iteration += num_learning_iterations
@@ -178,6 +195,10 @@ class HIMOnPolicyRunner:
         self.writer.add_scalar('Loss/Estimation Loss', locs['mean_estimation_loss'], locs['it'])
         self.writer.add_scalar('Loss/Swap Loss', locs['mean_swap_loss'], locs['it'])
         self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
+        self.writer.add_scalar('Loss/approx_kl', locs['mean_approx_kl'], locs['it'])
+        self.writer.add_scalar('Loss/clip_fraction', locs['mean_clip_fraction'], locs['it'])
+        self.writer.add_scalar('Loss/explained_variance', locs['mean_explained_variance'], locs['it'])
+        self.writer.add_scalar('Loss/gradient_norm', locs['mean_gradient_norm'], locs['it'])
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
         self.writer.add_scalar('Perf/collection time', locs['collection_time'], locs['it'])
@@ -226,22 +247,70 @@ class HIMOnPolicyRunner:
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
         print(log_string)
 
-    def save(self, path, infos=None):
+    def save(self, path, infos=None, iteration=None):
+        saved_iteration = (
+            self.current_learning_iteration
+            if iteration is None
+            else int(iteration)
+        )
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'estimator_optimizer_state_dict': self.alg.actor_critic.estimator.optimizer.state_dict(),
-            'iter': self.current_learning_iteration,
+            'iter': saved_iteration,
+            'parent_checkpoint_path': self.parent_checkpoint_path,
+            'parent_checkpoint_iteration': self.parent_checkpoint_iteration,
+            'iteration_reset_on_load': bool(
+                self.cfg.get("reset_iteration_on_load", False)
+            ),
             'infos': infos,
             }, path)
 
-    def load(self, path, load_optimizer=True):
+    def load(self, path, load_optimizer=None, actor_only=None):
         loaded_dict = torch.load(path)
-        self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
+        if actor_only is None:
+            actor_only = bool(self.cfg.get("load_actor_only", False))
+        if load_optimizer is None:
+            load_optimizer = bool(self.cfg.get("load_optimizer", True))
+        if actor_only:
+            transferable = {
+                key: value
+                for key, value in loaded_dict['model_state_dict'].items()
+                if not key.startswith("critic.")
+            }
+            incompatible = self.alg.actor_critic.load_state_dict(
+                transferable, strict=False
+            )
+            unexpected = [
+                key for key in incompatible.unexpected_keys
+                if not key.startswith("critic.")
+            ]
+            if unexpected:
+                raise RuntimeError(
+                    "unexpected actor-only checkpoint keys: "
+                    + ", ".join(unexpected)
+                )
+            load_optimizer = False
+        else:
+            self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
             self.alg.actor_critic.estimator.optimizer.load_state_dict(loaded_dict['estimator_optimizer_state_dict'])
-        self.current_learning_iteration = loaded_dict['iter']
+        source_iteration = int(loaded_dict.get('iter', 0))
+        reset_iteration = bool(self.cfg.get("reset_iteration_on_load", False))
+        self.parent_checkpoint_path = os.path.abspath(path)
+        self.parent_checkpoint_iteration = source_iteration
+        self.current_learning_iteration = 0 if reset_iteration else source_iteration
+        if reset_iteration:
+            print(
+                "Loaded parent checkpoint iteration: "
+                f"{source_iteration}; new stage local iteration reset to 0"
+            )
+        else:
+            print(
+                "Resuming checkpoint iteration: "
+                f"{source_iteration}; local iteration preserved"
+            )
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None):

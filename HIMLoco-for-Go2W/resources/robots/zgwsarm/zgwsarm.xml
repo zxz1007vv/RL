@@ -5,7 +5,7 @@
   <default>
     <geom friction="0.8 0.02 0.01" margin="0.001" condim="3"/>
     <default class="dog_dynamics">
-      <joint damping="0.1" armature="0.01" frictionloss="0.2"/>
+      <joint damping="0" armature="0" frictionloss="0"/>
     </default>
   </default>
 
@@ -55,6 +55,19 @@
       <geom size="0.0725 0.0815 0.0025" pos="-0.1825 5.12759e-12 0.0805" quat="-2.05103e-10 0 0 1" type="box" rgba="0.59216 0.61961 0.65098 1"/>
       <geom pos="-0.195 0 0.083" quat="-2.05103e-10 0 0 1" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.59216 0.61961 0.65098 1" mesh="ROBOT_ARM_LINK0"/>
       <geom size="0.037 0.0425" pos="-0.195 0 0.1305" quat="-2.05103e-10 0 0 1" type="cylinder" rgba="0.59216 0.61961 0.65098 1"/>
+      <!-- Isaac Gym 使用 collapse_fixed_joints=True。保留这两个无关节 body，
+           让 MuJoCo 以严格等价的固定子树质量、质心和惯量参与底盘动力学；
+           对应 visual/collision 已在 BASE_LINK 局部坐标中展开，不能重复添加。 -->
+      <body name="base_connector_link" pos="-0.195 0 0.083"
+            quat="-2.05103e-10 0 0 1">
+        <inertial pos="-0.0125 0 -0.0025" mass="0.32036557"
+                  fullinertia="0.0007099835 0.00061403401 0.0013206804 0 0 0"/>
+        <body name="ROBOT_ARM_LINK0">
+          <inertial pos="-0.0017004865 0.000010940902 0.041319589"
+                    mass="0.84262463"
+                    fullinertia="0.00091052522 0.00092591094 0.00089189032 0.0000031278488 -0.000027854597 0.0000080306608"/>
+        </body>
+      </body>
       <body name="FAR_ABAD_LINK" pos="0.272 -0.065 0.0002">
         <inertial pos="0.030211 -0.015926 4.7238e-07" quat="0.607864 0.607883 0.361226 0.361241" mass="0.26957" diaginertia="0.000331048 0.00025789 0.000163372"/>
         <joint class="dog_dynamics" name="FAR_ABAD_JOINT" pos="0 0 0" axis="1 0 0" range="-0.697 0.523" actuatorfrcrange="-180 180"/>
@@ -161,32 +174,32 @@
       </body>
       <body name="ROBOT_ARM_LINK1" pos="-0.195 0 0.1703" quat="-2.05103e-10 0 0 1">
         <inertial pos="0.000589257 -0.00515775 0.0517766" quat="0.804698 0.587373 -0.038747 -0.0771541" mass="0.955708" diaginertia="0.000861191 0.000737494 0.000691605"/>
-        <joint name="ROBOT_ARM_JOINT1" pos="0 0 0" axis="0 0 1" range="-2.618 2.618" actuatorfrcrange="-100 100"/>
+        <joint name="ROBOT_ARM_JOINT1" pos="0 0 0" axis="0 0 1" range="-2.618 2.618" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
         <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.59216 0.61961 0.65098 1" mesh="ROBOT_ARM_LINK1"/>
         <geom size="0.04 0.0315" pos="0 0 0.0547" quat="0.707107 -0.707107 0 0" type="cylinder" rgba="0.59216 0.61961 0.65098 1"/>
         <body name="ROBOT_ARM_LINK2" pos="0 0 0.0547001" quat="0.707107 -0.707107 0 0">
           <inertial pos="-0.169309 -0.00371886 -0.000262444" quat="0.487498 0.490087 0.511957 0.509961" mass="0.798701" diaginertia="0.0130768 0.0125328 0.00126061"/>
-          <joint name="ROBOT_ARM_JOINT2" pos="0 0 0" axis="0 0 1" range="0 3.14" actuatorfrcrange="-100 100"/>
+          <joint name="ROBOT_ARM_JOINT2" pos="0 0 0" axis="0 0 1" range="0 3.14" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="ROBOT_ARM_LINK2"/>
           <geom size="0.13 0.025 0.025" pos="-0.175 0 0" type="box"/>
           <body name="ROBOT_ARM_LINK3" pos="-0.349106 -0.025 0">
             <inertial pos="0.157531 -0.027604 -0.000700611" quat="0.0506507 0.699321 -0.0369299 0.712054" mass="1.82526" diaginertia="0.0578136 0.0575734 0.00169946"/>
-            <joint name="ROBOT_ARM_JOINT3" pos="0 0 0" axis="0 0 1" range="-2.9671 0" actuatorfrcrange="-100 100"/>
+            <joint name="ROBOT_ARM_JOINT3" pos="0 0 0" axis="0 0 1" range="-2.9671 0" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
             <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.59216 0.61961 0.65098 1" mesh="ROBOT_ARM_LINK3"/>
             <geom size="0.19 0.025 0.0225" pos="0.236863 -0.05 0" type="box" rgba="0.59216 0.61961 0.65098 1"/>
             <body name="ROBOT_ARM_LINK4" pos="0.396863 -0.05 0">
               <inertial pos="0.0695049 -0.00212407 -0.00377116" quat="0.0145319 0.516912 -0.0150634 0.855783" mass="0.537656" diaginertia="0.000518134 0.000509435 0.000298321"/>
-              <joint name="ROBOT_ARM_JOINT4" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" actuatorfrcrange="-100 100"/>
+              <joint name="ROBOT_ARM_JOINT4" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
               <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.69804 0.69804 0.69804 0.875" mesh="ROBOT_ARM_LINK4"/>
               <geom size="0.0325 0.031" pos="0.075 0 0" quat="0.707107 -0.707107 0 0" type="cylinder" rgba="0.69804 0.69804 0.69804 0.875"/>
               <body name="ROBOT_ARM_LINK5" pos="0.075 0 0" quat="0.707105 -0.707108 0 0">
                 <inertial pos="0.0674411 -3.96839e-06 -0.00439615" quat="-0.0996755 0.493951 -0.0571677 0.861864" mass="0.521586" diaginertia="0.000579142 0.000577218 0.000305172"/>
-                <joint name="ROBOT_ARM_JOINT5" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" actuatorfrcrange="-100 100"/>
+                <joint name="ROBOT_ARM_JOINT5" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
                 <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.59216 0.61961 0.65098 1" mesh="ROBOT_ARM_LINK5"/>
                 <geom size="0.0325 0.0285" pos="0.0713479 0 0" quat="0.707107 0 0.707107 0" type="cylinder" rgba="0.59216 0.61961 0.65098 1"/>
                 <body name="ROBOT_ARM_LINK6" pos="0.1 0 0" quat="0.707107 0 0.707107 0">
                   <inertial pos="0.0158883 -0.000496674 0.0496775" quat="0.325833 0.638859 0.622607 0.313134" mass="0.705218" diaginertia="0.00123815 0.00104629 0.000622667"/>
-                  <joint name="ROBOT_ARM_JOINT6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.1" armature="0.01"/>
+                  <joint name="ROBOT_ARM_JOINT6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" actuatorfrcrange="-100 100" damping="0.05" frictionloss="0.01"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="ROBOT_ARM_LINK6"/>
                   <geom size="0.032 0.0125" pos="0 0 0.0125" type="cylinder"/>
                   <geom pos="0 0 0.025" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="ROBOT_ARM_LINK7"/>

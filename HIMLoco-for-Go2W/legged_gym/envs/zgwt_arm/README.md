@@ -26,9 +26,34 @@ legged_gym/envs/zgwt_arm/   完整机械臂物理模型和传统臂控制
 机械臂策略观测、动作和 reward 不应加入 `zgwt/`。如果以后真正实现全身强化学习，
 应新建独立任务包，而不是改变当前 `zgwt_arm` 的 360/78/16 策略接口。
 
+机械臂只保留一种控制路径：
+`bias + M(qdd_ref + Kp*位置误差 + Kd*速度误差)`。仓库中没有控制律枚举或
+旧分支。新的站立任务还加入低幅动力学随机化、自然腿姿 reward 和 ABAD 外八
+专项约束；wheel-park 参数不变。
+
 机器人模型和训练数据不放在环境源码目录：
 
 - URDF/MJCF/STL：`resources/robots/zgwsarm/`；
 - 控制契约和姿态 CSV：`config/robots/zgwsarm/`；
 - 资产生成与验证命令：`tools/zgwsarm/`；
-- 回归测试：`legged_gym/tests/test_zgwt_arm_control.py`。
+- 回归测试：`legged_gym/tests/test_zgwt_arm_control.py` 和
+  `legged_gym/tests/test_zgwsarm_mjcf.py`。
+
+## MuJoCo 参考模型对齐
+
+`resources/robots/zgwsarm/zgwsarm.xml` 是 Isaac Gym 组合 URDF 的部署参考
+模型。它显式保留无关节的 `base_connector_link` 与 `ROBOT_ARM_LINK0`
+惯性，因此只统计 `BASE_LINK` 子树时总质量为 `47.5524395 kg`；两者的 visual
+和 collision 已在 `BASE_LINK` 坐标中展开，不重复创建 geom。16 个狗关节的
+被动 damping、frictionloss、armature 均为 0，六个机械臂关节分别为
+`0.05/0.01/0`。
+
+上述契约由 MuJoCo 回归测试同时针对 `zgwsarm.xml` 和 `scene_terrain.xml`
+检查，场景中的 mocap 鸡头标记不会计入机器人质量。
+
+```bash
+python -m unittest \
+  legged_gym.tests.test_zgwt_dance \
+  legged_gym.tests.test_zgwt_arm_control \
+  legged_gym.tests.test_zgwsarm_mjcf -v
+```

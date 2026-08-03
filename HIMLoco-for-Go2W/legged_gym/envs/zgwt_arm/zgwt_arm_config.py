@@ -2,7 +2,7 @@ from ..zgwt.zgwt_dance_config import ZGWTDanceCfg, ZGWTDanceCfgPPO
 
 
 class ZGWTDanceArmCfg(ZGWTDanceCfg):
-    """ArmStandV1：完整机械臂物理模型，机械臂固定在仿真 home。"""
+    """Aligned ArmStand：完整机械臂物理模型下重新训练自然站立。"""
 
     class env(ZGWTDanceCfg.env):
         # 策略接口保持原样：360-D actor history、78-D critic、16-D action。
@@ -44,21 +44,21 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             body_pitch = [0.0, 0.0]
             body_height = [0.54, 0.54]
 
-    # 带臂任务的 reward 在这里完整定义，不继承 ZGWTDanceCfg.rewards。
-    # 初始数值与父鸡头任务保持一致，后续 ArmStand 调参只修改本节。
+    # 带臂任务的 reward 在这里完整定义，不继承 ZGWTDanceCfg.rewards；
+    # 本阶段针对带臂承载下的压弯和外八独立调参。
     class rewards:
         class scales:
             # 姿态命令跟踪。roll/pitch 共用目标重力方向误差。
-            tracking_body_orientation = 11.0
+            tracking_body_orientation = 13.0
             tracking_body_yaw = 6.0
-            tracking_body_height = 6.0
+            tracking_body_height = 9.0
 
             # 静止保持。先约束支撑中心，再约束各轮足位置。
             tracking_lin_vx = 3.0
             tracking_lin_vy = 3.0
-            tracking_support_position = 3.0
-            tracking_feet_position = 1.0
-            tracking_max_foot_position = 0.5
+            tracking_support_position = 4.0
+            tracking_feet_position = 2.0
+            tracking_max_foot_position = 1.5
 
             # 稳定、平滑和安全项。scales 是唯一 reward 权重来源。
             yaw_rate = -0.05
@@ -68,8 +68,10 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             feet_vertical_motion = -0.1
             action_rate = -0.01
             action_smoothness = -0.005
-            torques = -8.0e-6
-            neutral_joint_pose = -3.0
+            # 允许策略为承载机械臂输出必要力矩，同时加强实际腿姿约束。
+            torques = -5.0e-6
+            neutral_joint_pose = -5.0
+            neutral_abduction_pose = -4.0
             dof_pos_limits = -2.0
             torque_limits = -0.1
             severe_wheel_park = -4.0
@@ -137,7 +139,7 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             "near_allowed_boundary": 0.10,
         }
 
-        # C++ MuJoCo simulation_controller 契约值；不代表真机标定值。
+        # 唯一控制律为惯量归一化计算力矩；Kp/Kd 是加速度域闭环增益。
         kp = [500.0] * 6
         kd = [45.0] * 6
         torque_limits = [100.0] * 6
@@ -151,22 +153,31 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
         arm_contact_termination_force = 5.0
         gravity_compensation = True
         coriolis_compensation = True
-        mass_matrix_target_acceleration_feedforward = True
-        joint_impedance_outside_mass_matrix = True
         compensate_base_angular_velocity = True
         compensate_base_acceleration = False
 
     class domain_rand(ZGWTDanceCfg.domain_rand):
-        # 完整机械臂已经提供真实质量和质心，不再叠加等效 payload/COM。
-        randomize_payload_mass = False
-        randomize_com_displacement = False
-        randomize_link_mass = False
-        randomize_friction = False
+        # 完整机械臂保留名义动力学，在其周围加入低幅随机化，覆盖 URDF/MJCF、
+        # 电机和接触差异；范围刻意小于旧无臂 payload 随机化，避免破坏自然腿姿。
+        randomize_payload_mass = True
+        payload_mass_range = [-0.5, 1.5]
+        randomize_com_displacement = True
+        com_displacement_range = [-0.015, 0.015]
+        com_displacement_is_offset = True
+        randomize_link_mass = True
+        link_mass_range = [0.95, 1.05]
+        randomize_friction = True
+        friction_range = [0.70, 1.10]
         randomize_restitution = False
-        randomize_motor_strength = False
-        randomize_kp = False
-        randomize_kd = False
-        randomize_initial_joint_pos = False
+        restitution_range = [0.0, 0.05]
+        randomize_motor_strength = True
+        motor_strength_range = [0.95, 1.05]
+        randomize_kp = True
+        kp_range = [0.95, 1.05]
+        randomize_kd = True
+        kd_range = [0.90, 1.10]
+        randomize_initial_joint_pos = True
+        initial_joint_pos_range = [0.97, 1.03]
         randomize_initial_base_velocity = False
         disturbance = False
         push_robots = False
@@ -180,22 +191,22 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
 class ZGWTDanceArmCfgPPO(ZGWTDanceCfgPPO):
     class runner(ZGWTDanceCfgPPO.runner):
         experiment_name = "ZGWT_DANCE_ARM"
-        run_name = "armstandv1"
+        run_name = "armstand_aligned_v1"
         save_interval = 250
         max_iterations = 20000
         resume = True
-        # ArmStandV1 已完成首轮训练；当前默认加载本阶段 checkpoint，续训时
-        # 保留原迭代号和 Adam 状态。首次从 stage1v4 创建本阶段时的设置已结束。
-        reset_iteration_on_load = False
-        load_actor_only = False
-        load_optimizer = True
+        # 只把旧 ArmStandV1 的 actor/estimator 当作初始化；新控制律、reward、
+        # 随机化和 critic 均从新阶段重新适应，不继承迭代号或 Adam 状态。
+        reset_iteration_on_load = True
+        load_actor_only = True
+        load_optimizer = False
         load_experiment_name = "ZGWT_DANCE_ARM"
         load_run = "Jul31_18-46-40_armstandv1"
         checkpoint = 20000
 
 
 class ZGWTDanceArmStaticCfg(ZGWTDanceArmCfg):
-    """ArmStandV2-Sim：每个 episode 固定一个仿真验证安全姿态。"""
+    """ArmStand 静态姿态库阶段：每个 episode 固定一个安全姿态。"""
 
     class arm(ZGWTDanceArmCfg.arm):
         pose_mode = "library"
@@ -204,11 +215,11 @@ class ZGWTDanceArmStaticCfg(ZGWTDanceArmCfg):
 class ZGWTDanceArmStaticCfgPPO(ZGWTDanceArmCfgPPO):
     class runner(ZGWTDanceArmCfgPPO.runner):
         experiment_name = "ZGWT_DANCE_ARM"
-        run_name = "armstandv2_static"
-        # 人工完成 ArmStandV1 后，从该实验目录的最新 checkpoint 进入 V2。
+        run_name = "armstandv2_aligned"
+        # 后续开始姿态库阶段时，应改为加载新完成的 armstand_aligned_v1。
         load_experiment_name = "ZGWT_DANCE_ARM"
-        load_run = -1
-        checkpoint = -1
+        load_run = "Jul31_18-46-40_armstandv1"
+        checkpoint = 20000
         # 新阶段只继承网络权重，从第 0 代开始，并重置 Adam。
         reset_iteration_on_load = True
         load_optimizer = False

@@ -40,6 +40,18 @@ class ArmStaticPose(NamedTuple):
     min_jacobian_sigma: float
 
 
+def inertia_normalized_desired_acceleration(
+    reference_acceleration,
+    position_error,
+    velocity_error,
+    kp,
+    kd,
+):
+    """唯一控制律：把位置/速度反馈解释为加速度并统一送入逆动力学。"""
+
+    return reference_acceleration + kp * position_error + kd * velocity_error
+
+
 def parse_bool(value: str) -> bool:
     normalized = str(value).strip().lower()
     if normalized in {"1", "true", "yes", "y"}:

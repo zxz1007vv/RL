@@ -1,3 +1,4 @@
+import ast
 import csv
 import importlib.util
 from pathlib import Path
@@ -33,6 +34,77 @@ DYNAMICS_SPEC.loader.exec_module(DYNAMICS)
 class TestZGWTArmControl(unittest.TestCase):
     LOWER = [-2.618, 0.0, -2.9671, -1.57, -1.57, -6.28]
     UPPER = [2.618, 3.14, 0.0, 1.57, 1.57, 6.28]
+
+    @staticmethod
+    def _formula_inputs():
+        q = torch.tensor(
+            [0.2, 0.7, -1.1, 0.3, -0.4, 0.6], dtype=torch.double
+        )
+        dq = torch.tensor(
+            [0.1, -0.2, 0.3, -0.4, 0.5, -0.6], dtype=torch.double
+        )
+        q_ref = torch.tensor(
+            [-0.1, 1.0, -1.4, 0.5, -0.2, 0.1], dtype=torch.double
+        )
+        dq_ref = torch.tensor(
+            [-0.2, 0.1, -0.1, 0.2, -0.3, 0.4], dtype=torch.double
+        )
+        qdd_ref = torch.tensor(
+            [0.3, -0.1, 0.2, -0.4, 0.6, -0.5], dtype=torch.double
+        )
+        factor = torch.tensor(
+            [
+                [1.4, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.2, 1.2, 0.0, 0.0, 0.0, 0.0],
+                [0.1, -0.2, 1.1, 0.0, 0.0, 0.0],
+                [0.0, 0.1, 0.2, 1.3, 0.0, 0.0],
+                [-0.1, 0.0, 0.1, 0.2, 1.0, 0.0],
+                [0.2, -0.1, 0.0, 0.1, 0.2, 1.2],
+            ],
+            dtype=torch.double,
+        )
+        mass_matrix = factor @ factor.T
+        bias = torch.tensor(
+            [1.0, -2.0, 0.5, 1.5, -0.7, 0.9], dtype=torch.double
+        )
+        kp = torch.full((6,), 500.0, dtype=torch.double)
+        kd = torch.full((6,), 45.0, dtype=torch.double)
+        return q, dq, q_ref, dq_ref, qdd_ref, mass_matrix, bias, kp, kd
+
+    def test_only_control_law_places_feedback_inside_mass_matrix(self):
+        q, dq, q_ref, dq_ref, qdd_ref, mass, bias, kp, kd = (
+            self._formula_inputs()
+        )
+        acceleration = UTILS.inertia_normalized_desired_acceleration(
+            qdd_ref,
+            q_ref - q,
+            dq_ref - dq,
+            kp,
+            kd,
+        )
+        actual = bias + mass @ acceleration
+        feedback = kp * (q_ref - q) + kd * (dq_ref - dq)
+        expected = bias + mass @ (qdd_ref + feedback)
+        torch.testing.assert_close(actual, expected)
+        self.assertFalse(torch.allclose(actual, expected + feedback))
+
+    def test_legacy_control_law_switches_are_absent(self):
+        root = Path(__file__).parents[2]
+        paths = (
+            root / "legged_gym/envs/zgwt_arm/zgwt_arm_control_utils.py",
+            root / "legged_gym/envs/zgwt_arm/zgwt_arm_config.py",
+            root / "legged_gym/envs/zgwt_arm/zgwt_arm_robot.py",
+            root / "config/robots/zgwsarm/arm_control_contract.yaml",
+        )
+        forbidden = (
+            "physical_joint_impedance",
+            "joint_impedance_outside_mass_matrix",
+            "arm.control_law",
+        )
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, source, f"{path} 仍包含 {token}")
 
     def test_torque_rate_limit_matches_two_nm_per_physics_step(self):
         desired = torch.full((2, 6), 100.0)
@@ -145,6 +217,177 @@ class TestZGWTArmControl(unittest.TestCase):
                 UTILS.load_simulation_verified_poses(
                     str(path), self.LOWER, self.UPPER, 0.15, 0.02
                 )
+
+    def test_static_task_uses_library_and_samples_only_on_reset(self):
+        env_dir = Path(__file__).parents[1] / "envs" / "zgwt_arm"
+        config_tree = ast.parse(
+            (env_dir / "zgwt_arm_config.py").read_text(encoding="utf-8")
+        )
+        static_config = next(
+            node
+            for node in config_tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "ZGWTDanceArmStaticCfg"
+        )
+        arm_config = next(
+            node
+            for node in static_config.body
+            if isinstance(node, ast.ClassDef) and node.name == "arm"
+        )
+        pose_mode = next(
+            node
+            for node in arm_config.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "pose_mode"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(ast.literal_eval(pose_mode.value), "library")
+
+        robot_tree = ast.parse(
+            (env_dir / "zgwt_arm_robot.py").read_text(encoding="utf-8")
+        )
+        callers = []
+        for function in (
+            node
+            for node in ast.walk(robot_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ):
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_sample_arm_targets"
+                for node in ast.walk(function)
+            ):
+                callers.append(function.name)
+        self.assertEqual(callers, ["_reset_dofs"])
+
+    def test_armstand_reward_randomization_and_policy_configuration_contract(self):
+        config_path = (
+            Path(__file__).parents[1]
+            / "envs"
+            / "zgwt_arm"
+            / "zgwt_arm_config.py"
+        )
+        tree = ast.parse(config_path.read_text(encoding="utf-8"))
+
+        def class_node(parent, name):
+            return next(
+                node
+                for node in parent.body
+                if isinstance(node, ast.ClassDef) and node.name == name
+            )
+
+        def assignment_value(parent, name):
+            assignment = next(
+                node
+                for node in parent.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == name
+                    for target in node.targets
+                )
+            )
+            value = assignment.value
+            if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
+                return ast.literal_eval(value.left) * ast.literal_eval(value.right)
+            return ast.literal_eval(value)
+
+        armstand_v1 = class_node(tree, "ZGWTDanceArmCfg")
+        arm_config = class_node(armstand_v1, "arm")
+        self.assertEqual(assignment_value(arm_config, "kp"), [500.0] * 6)
+        self.assertEqual(assignment_value(arm_config, "kd"), [45.0] * 6)
+
+        armstand_v2 = class_node(tree, "ZGWTDanceArmStaticCfg")
+        aligned_arm = class_node(armstand_v2, "arm")
+        self.assertEqual(assignment_value(aligned_arm, "pose_mode"), "library")
+
+        ppo = class_node(tree, "ZGWTDanceArmCfgPPO")
+        runner = class_node(ppo, "runner")
+        self.assertEqual(
+            assignment_value(runner, "run_name"), "armstand_aligned_v1"
+        )
+        self.assertTrue(assignment_value(runner, "reset_iteration_on_load"))
+        self.assertTrue(assignment_value(runner, "load_actor_only"))
+        self.assertFalse(assignment_value(runner, "load_optimizer"))
+
+        armstand_v2_ppo = class_node(tree, "ZGWTDanceArmStaticCfgPPO")
+        aligned_runner = class_node(armstand_v2_ppo, "runner")
+        self.assertEqual(
+            assignment_value(aligned_runner, "run_name"),
+            "armstandv2_aligned",
+        )
+        self.assertEqual(assignment_value(aligned_runner, "checkpoint"), 20000)
+
+        rewards = class_node(armstand_v1, "rewards")
+        scales = class_node(rewards, "scales")
+        self.assertEqual(
+            assignment_value(scales, "neutral_abduction_pose"), -4.0
+        )
+        self.assertEqual(assignment_value(scales, "neutral_joint_pose"), -5.0)
+        self.assertEqual(assignment_value(scales, "tracking_body_height"), 9.0)
+
+        domain_rand = class_node(armstand_v1, "domain_rand")
+        self.assertTrue(assignment_value(domain_rand, "randomize_link_mass"))
+        self.assertEqual(
+            assignment_value(domain_rand, "com_displacement_range"),
+            [-0.015, 0.015],
+        )
+        self.assertEqual(
+            assignment_value(domain_rand, "motor_strength_range"),
+            [0.95, 1.05],
+        )
+
+        env = class_node(armstand_v1, "env")
+        self.assertEqual(assignment_value(env, "num_actions"), 16)
+        one_step_observation = 3 + 3 + 6 + 16 + 16 + 16
+        critic_observation = one_step_observation + 3 + 3 + 12
+        self.assertEqual(one_step_observation * 6, 360)
+        self.assertEqual(critic_observation, 78)
+
+    def test_actual_pose_library_large_sampling_stays_simulation_safe(self):
+        pose_path = (
+            Path(__file__).parents[2]
+            / "config"
+            / "robots"
+            / "zgwsarm"
+            / "arm_safe_static_poses.csv"
+        )
+        poses = UTILS.load_simulation_verified_poses(
+            str(pose_path), self.LOWER, self.UPPER, 0.15, 0.02
+        )
+        self.assertEqual(len(poses), 455)
+        weights = UTILS.normalized_pose_weights(
+            poses,
+            {
+                "home_or_folded": 0.30,
+                "workspace_midrange": 0.40,
+                "directional_extension": 0.20,
+                "near_allowed_boundary": 0.10,
+            },
+        )
+        generator = torch.Generator().manual_seed(20260803)
+        sampled_indices = torch.multinomial(
+            torch.tensor(weights, dtype=torch.double),
+            100_000,
+            replacement=True,
+            generator=generator,
+        )
+        self.assertEqual(sampled_indices.numel(), 100_000)
+        self.assertGreater(len(poses), 0)
+        for pose in poses:
+            self.assertTrue(pose.simulation_verified)
+            self.assertTrue(pose.collision_checked)
+            self.assertTrue(pose.singularity_checked)
+            self.assertGreaterEqual(pose.min_joint_margin_rad, 0.15)
+            self.assertGreaterEqual(pose.min_jacobian_sigma, 0.02)
+            self.assertGreater(
+                UTILS.joint_limit_margin(pose.q, self.LOWER, self.UPPER),
+                0.15 - 1.0e-9,
+            )
+            self.assertNotEqual(tuple(pose.q), (0.0,) * 6)
+            self.assertFalse(pose.hardware_verified)
 
 
 class TestZGWTArmDynamics(unittest.TestCase):

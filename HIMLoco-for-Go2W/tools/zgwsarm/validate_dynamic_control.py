@@ -132,7 +132,9 @@ def validate(args, duration):
 
 def parse_duration(argv):
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--duration", type=float, default=3.0)
+    # 惯量归一化控制配合 1000 N·m/s 力矩斜率限制时，需要给最终目标
+    # 留出独立收敛时间；5 秒验证曾出现 0.070416 rad 的剩余误差。
+    parser.add_argument("--duration", type=float, default=10.0)
     known, remaining = parser.parse_known_args(argv[1:])
     sys.argv = [argv[0]] + remaining
     return known.duration

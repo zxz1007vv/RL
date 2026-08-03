@@ -6,6 +6,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 
 from .zgwt_arm_control_utils import (
     advance_limited_joint_reference,
+    inertia_normalized_desired_acceleration,
     load_simulation_verified_poses,
     normalized_pose_weights,
     torque_rate_limit,
@@ -17,6 +18,10 @@ from ..zgwt.zgwt_dance_robot import ZgwtDance
 
 class ZgwtDanceArm(ZgwtDance):
     """腿部策略与六轴传统控制器解耦的 ZGWT 带臂舞蹈环境。"""
+
+    SOFT_REWARD_NAMES = ZgwtDance.SOFT_REWARD_NAMES | {
+        "neutral_abduction_pose"
+    }
 
     cfg: ZGWTDanceArmCfg
 
@@ -66,6 +71,17 @@ class ZgwtDanceArm(ZgwtDance):
             dtype=torch.long,
             device=self.device,
         )
+        self.policy_abad_indices = torch.tensor(
+            [
+                policy_position[index]
+                for index in policy_indices
+                if "ABAD_JOINT" in self.dof_names[index]
+            ],
+            dtype=torch.long,
+            device=self.device,
+        )
+        if self.policy_abad_indices.numel() != 4:
+            raise ValueError("轮腿策略必须包含 4 个 ABAD 关节")
         self.arm_body_indices = torch.tensor(
             [
                 handle
@@ -92,19 +108,14 @@ class ZgwtDanceArm(ZgwtDance):
                 f"机械臂控制周期 {arm.control_dt} 必须等于 PhysX dt "
                 f"{self.sim_params.dt}；控制器在每个物理子步执行。"
             )
-        required_dynamics_flags = (
-            bool(arm.gravity_compensation),
-            bool(arm.coriolis_compensation),
-            bool(arm.mass_matrix_target_acceleration_feedforward),
-            bool(arm.joint_impedance_outside_mass_matrix),
-        )
-        if not all(required_dynamics_flags):
+        if not (
+            bool(arm.gravity_compensation)
+            and bool(arm.coriolis_compensation)
+        ):
             raise ValueError(
-                "带臂训练必须启用重力、科氏/离心、质量矩阵目标加速度"
-                "前馈和关节阻抗，"
+                "带臂训练必须启用重力和科氏/离心补偿，"
                 "避免产生与 C++ 不一致的残缺控制器。"
             )
-
         self.arm_kp = torch.tensor(
             arm.kp, dtype=torch.float, device=self.device
         ).unsqueeze(0)
@@ -384,11 +395,12 @@ class ZgwtDanceArm(ZgwtDance):
         )
         arm_pos = self.dof_pos[:, self.arm_dof_indices]
         arm_vel = self.dof_vel[:, self.arm_dof_indices]
-        position_feedback = self.arm_kp * (
-            self.arm_reference_position - arm_pos
-        )
-        velocity_feedback = self.arm_kd * (
-            self.arm_reference_velocity - arm_vel
+        desired_acceleration = inertia_normalized_desired_acceleration(
+            self.arm_reference_acceleration,
+            self.arm_reference_position - arm_pos,
+            self.arm_reference_velocity - arm_vel,
+            self.arm_kp,
+            self.arm_kd,
         )
         base_angular_velocity = (
             self.root_states[:, 10:13]
@@ -398,12 +410,11 @@ class ZgwtDanceArm(ZgwtDance):
         desired_arm_torque = self.arm_dynamics.inverse_dynamics(
             arm_pos,
             arm_vel,
-            self.arm_reference_acceleration,
+            desired_acceleration,
             base_quaternion=self.root_states[:, 3:7],
             base_angular_velocity=base_angular_velocity,
             gravity=self.arm_gravity_world,
         )
-        desired_arm_torque += position_feedback + velocity_feedback
         desired_arm_torque = torch.clip(
             desired_arm_torque,
             min=-self.arm_torque_limits,
@@ -431,6 +442,16 @@ class ZgwtDanceArm(ZgwtDance):
         torques[:, self.policy_dof_indices] = policy_torque
         torques[:, self.arm_dof_indices] = arm_torque
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
+
+    def _reward_neutral_abduction_pose(self):
+        """在静止站立时专门抑制四条腿向外劈开的外八姿态。"""
+
+        policy_pos = self.dof_pos[:, self.policy_dof_indices]
+        policy_default = self.default_dof_pos[:, self.policy_dof_indices]
+        error = policy_pos[:, self.policy_abad_indices] - policy_default[
+            :, self.policy_abad_indices
+        ]
+        return torch.sum(torch.abs(error), dim=1) * self._neutral_pose_weight()
 
     def reset_idx(self, env_ids):
         if len(env_ids) == 0:

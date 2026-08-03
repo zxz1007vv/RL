@@ -1,5 +1,5 @@
-schema_version: 2
-export_date: "2026-07-31"
+schema_version: 4
+export_date: "2026-08-03"
 robot_name: zgwsarm
 
 frames:
@@ -43,7 +43,9 @@ safe_static_pose_library:
   file: config/robots/zgwsarm/arm_safe_static_poses.csv
   candidate_file: config/robots/zgwsarm/arm_pose_candidates.csv
   generated_candidate_count: 500
-  simulation_verified_pose_count: 344
+  simulation_verified_pose_count: 455
+  validation_controller: inertia_normalized_computed_torque
+  aligned_revalidation_required: false
   hardware_verified_pose_count: 0
   static_validation_duration_s: 2.0
   simulation_sampler_requires:
@@ -58,11 +60,14 @@ safe_static_pose_library:
 
 simulation_controller:
   status: simulation_only
+  training_task: zgwt_dance_arm
+  training_run_name: armstand_aligned_v1
   control_dt: 0.002
   control_frequency_hz: 500.0
   joint_control:
-    type: computed_torque_joint_impedance
-    equation: "tau = bias(q,dq) + M(q)*qdd_ref + Kp*(q_ref-q) + Kd*(dq_ref-dq)"
+    type: inertia_normalized_computed_torque
+    equation: "tau = bias(q,dq) + M(q)*(qdd_ref + Kp*(q_ref-q) + Kd*(dq_ref-dq))"
+    gain_domain: joint_acceleration
     kp: [500.0, 500.0, 500.0, 500.0, 500.0, 500.0]
     kd: [45.0, 45.0, 45.0, 45.0, 45.0, 45.0]
     torque_limits: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
@@ -71,7 +76,6 @@ simulation_controller:
     isaac_gravity_compensation: true
     isaac_bias_dynamics: recursive_newton_euler_from_urdf
     isaac_mass_matrix_target_acceleration_feedforward: true
-    joint_impedance_outside_mass_matrix: true
     base_angular_velocity_compensation: true
     base_linear_and_angular_acceleration_feedforward: false
     isaac_note: >
@@ -85,15 +89,19 @@ simulation_controller:
     acceleration: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
     velocity_filter_tau: 0.005
   dynamic_validation:
+    status: failed_final_error_at_5_seconds
+    required_before_static_pose_training: true
     duration_s: 5.0
     maximum_reference_velocity_rad_s: 0.5
     maximum_reference_acceleration_rad_s2: 2.0
-    maximum_torque_ratio: 0.187262
+    maximum_torque_ratio: 0.253345
     maximum_torque_rate_nm_s: 999.999939
-    final_tracking_error_rad: 0.010966
+    final_tracking_error_rad: 0.070416
+    final_tracking_error_limit_rad: 0.05
     remaining_command_error_rad: 0.0
     reset_count: 0
-    passed: true
+    recommended_retry_duration_s: 10.0
+    passed: false
 
 singularity:
   joint_limit_margin_rad: 0.15
@@ -105,6 +113,36 @@ mass_model:
   dog_without_arm_and_connector_mass: 41.04532
   arm_connector_and_tool_mass: 6.5071195
   total_mass: 47.5524395
+
+standing_training:
+  task: zgwt_dance_arm
+  run_name: armstand_aligned_v1
+  arm_pose_mode: home
+  parent_checkpoint: logs/ZGWT_DANCE_ARM/Jul31_18-46-40_armstandv1/model_20000.pt
+  load_actor_and_estimator_only: true
+  reset_critic_optimizer_and_iteration: true
+  reward_scales:
+    tracking_body_orientation: 13.0
+    tracking_body_yaw: 6.0
+    tracking_body_height: 9.0
+    tracking_support_position: 4.0
+    tracking_feet_position: 2.0
+    tracking_max_foot_position: 1.5
+    neutral_joint_pose: -5.0
+    neutral_abduction_pose: -4.0
+    torques: -0.000005
+  domain_randomization:
+    payload_mass_kg: [-0.5, 1.5]
+    base_com_offset_m: [-0.015, 0.015]
+    link_mass_scale: [0.95, 1.05]
+    friction: [0.70, 1.10]
+    motor_strength_scale: [0.95, 1.05]
+    leg_kp_scale: [0.95, 1.05]
+    leg_kd_scale: [0.90, 1.10]
+    initial_joint_position_scale: [0.97, 1.03]
+  wheel_park:
+    stiffness: 25.0
+    damping: 2.5
 
 policy_interface:
   actor_history_observation_dim: 360

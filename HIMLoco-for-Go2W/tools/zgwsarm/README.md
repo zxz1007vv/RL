@@ -20,6 +20,8 @@ python tools/zgwsarm/generate_pose_candidates.py --count 500
 在固定基座 PhysX 中对全部候选姿态执行 2 秒静态保持，检查碰撞力、关节保持
 误差和力矩占比，并生成 ArmStandV2 使用的
 `arm_safe_static_poses.csv`。
+验证控制器与 ArmStandV2 一致，使用惯量归一化计算力矩；控制律发生变化后
+必须重新生成验证结果。
 
 ```bash
 python tools/zgwsarm/validate_static_poses.py \
@@ -38,8 +40,11 @@ python tools/zgwsarm/validate_dynamic_control.py \
   --task zgwt_dance_arm_static \
   --headless \
   --num_envs 1 \
-  --duration 5.0
+  --duration 10.0
 ```
+
+5 秒验证曾在其他指标正常时留下 `0.070416 rad` 最终误差，因此默认使用
+10 秒收敛窗口，最终误差阈值仍保持 `0.05 rad`。
 
 ## 推荐执行顺序
 

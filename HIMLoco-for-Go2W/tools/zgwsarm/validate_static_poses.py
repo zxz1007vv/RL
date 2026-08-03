@@ -1,6 +1,6 @@
 """在固定基座 PhysX 中验证机械臂候选姿态并生成 ArmStandV2 姿态库。
 
-验证内容包括：机械臂/机身/地面碰撞、传统 PD 静态保持误差、力矩占比。
+验证内容包括：机械臂/机身/地面碰撞、aligned 计算力矩静态保持误差、力矩占比。
 输入候选必须已经完成关节限位和 Jacobian 检查。通过的行才会写成
 ``simulation_verified=true``；``hardware_verified`` 永远保持 false。
 """
@@ -14,6 +14,9 @@ from isaacgym import gymapi, gymtorch
 import torch
 
 from legged_gym.envs.zgwt_arm.zgwt_arm_dynamics import ZgwtArmDynamics
+from legged_gym.envs.zgwt_arm.zgwt_arm_control_utils import (
+    inertia_normalized_desired_acceleration,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -189,17 +192,20 @@ def validate(args):
         desired = kp * (target - state[..., 0]) - kd * state[..., 1]
         arm_position = state[:, arm_dof_indices, 0]
         arm_velocity = state[:, arm_dof_indices, 1]
+        desired_acceleration = inertia_normalized_desired_acceleration(
+            torch.zeros_like(arm_position),
+            target[:, arm_dof_indices] - arm_position,
+            -arm_velocity,
+            500.0,
+            45.0,
+        )
         desired_arm = arm_dynamics.inverse_dynamics(
             arm_position,
             arm_velocity,
-            torch.zeros_like(arm_position),
+            desired_acceleration,
             base_quaternion=fixed_base_quaternion,
             base_angular_velocity=zero_base_angular_velocity,
             gravity=gravity_world,
-        )
-        desired_arm += (
-            500.0 * (target[:, arm_dof_indices] - arm_position)
-            - 45.0 * arm_velocity
         )
         desired_arm = desired_arm.clamp(-100.0, 100.0)
         arm_delta = (desired_arm - previous_arm_torque).clamp(

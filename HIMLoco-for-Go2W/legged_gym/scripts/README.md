@@ -25,5 +25,5 @@ python legged_gym/scripts/train.py --task zgwt_dance_arm --headless
 python legged_gym/scripts/play.py --task zgwt_dance_arm --checkpoint 800
 ```
 
-ZGWSARM 的训练资产生成、姿态库生成以及静态/动态控制验证位于
+ZGWSARM 的姿态库生成以及静态/动态控制验证位于
 `tools/zgwsarm/`，具体用途和执行顺序见该目录的 README。

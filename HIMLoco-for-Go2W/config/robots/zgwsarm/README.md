@@ -14,17 +14,14 @@
 - 六个机械臂关节不进入 actor、critic 或 estimator；
 - 机械臂姿态只作为环境物理参数和 TensorBoard 诊断信息。
 
-完整资产有 22 个可动 DOF：原轮足 16 个，加机械臂 6 个。训练 URDF 已删除
+完整资产有 22 个可动 DOF：原轮足 16 个，加机械臂 6 个。组合 URDF 已删除
 原模型顶部错误的 `world -> BASE_LINK` 转动关节，否则会出现第 23 个 DOF。
 末端执行器碰撞网格已替换为保守圆柱，视觉网格保持不变。
 
-Isaac 任务实际加载 `zgwsarm_train.urdf`。它保留原模型的质量、惯量、关节和
-碰撞，只把高精度 STL visual 换成基础几何，避免每次启动都花大量时间导入
-网格。原始 `zgwsarm.urdf` 仍保留完整视觉模型。源 URDF 更新后重新生成：
-
-```bash
-python tools/zgwsarm/prepare_training_asset.py
-```
+训练、play、静态姿态验证和动力学计算现在统一加载 `zgwsarm.urdf`，使用完整
+STL visual。质量、惯量、关节和 collision 也全部来自这一份文件，不再维护
+轻量视觉副本。完整网格会增加 Isaac Gym 首次导入和多环境创建时间，这是恢复
+完整外观后的预期代价。
 
 ## ArmStandV1
 
@@ -34,7 +31,14 @@ python tools/zgwsarm/prepare_training_asset.py
 python legged_gym/scripts/train.py --task zgwt_dance_arm
 ```
 
-默认从 `Jul31_14-10-28_stage1v4/model_800.pt` 继承网络权重，新阶段保存到：
+ArmStandV1 最初由 `Jul31_14-10-28_stage1v4/model_800.pt` 初始化。当前默认加载
+已完成训练的 `Jul31_18-46-40_armstandv1/model_20000.pt`，对应版本化导出名：
+
+```text
+policy_armstandv1_ckpt20000.pt
+```
+
+本阶段训练记录位于：
 
 ```text
 logs/ZGWT_DANCE_ARM/*_armstandv1/
@@ -85,9 +89,10 @@ tau = bias(q,dq) + M(q) qdd_ref
 python legged_gym/scripts/play.py --task zgwt_dance_arm --checkpoint 800
 ```
 
-这里的 `--checkpoint` 会覆盖任务配置。ArmStandV1 真正训练完成后，还要把
-`load_experiment_name/load_run/checkpoint` 改到对应的
-`ZGWT_DANCE_ARM/*_armstandv1`，不要继续加载父模型的 800。
+这里的 `--checkpoint` 会覆盖任务配置，但仍在当前
+`ZGWT_DANCE_ARM/Jul31_18-46-40_armstandv1` 中查找。导出文件统一使用
+`policy_<run_name>_ckpt<实际 checkpoint>.pt`，同时更新部署快捷文件
+`policy.pt`。
 
 ## ArmStandV2-Sim
 

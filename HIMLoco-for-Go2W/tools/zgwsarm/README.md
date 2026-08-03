@@ -1,21 +1,9 @@
 # ZGWSARM 工具说明
 
-这里放置 ZGWSARM 的离线资产工具和训练前验证工具。它们不是 PPO 训练入口，
+这里放置 ZGWSARM 的离线姿态工具和训练前验证工具。它们不是 PPO 训练入口，
 也不会自行开始训练。
 
 ## 文件用途
-
-### `prepare_training_asset.py`
-
-从 `resources/robots/zgwsarm/zgwsarm.urdf` 生成
-`zgwsarm_train.urdf`。质量、惯量、关节和碰撞保持不变，仅将高精度 visual
-网格替换为基础几何，以减少 Isaac Gym 首次加载和多环境创建时间。
-
-只有源 URDF 发生变化时才需要重新运行：
-
-```bash
-python tools/zgwsarm/prepare_training_asset.py
-```
 
 ### `generate_pose_candidates.py`
 
@@ -59,12 +47,12 @@ python tools/zgwsarm/validate_dynamic_control.py \
 
 ```text
 源 URDF 变化
-  → prepare_training_asset.py
   → generate_pose_candidates.py
   → validate_static_poses.py
   → validate_dynamic_control.py
   → legged_gym/scripts/train.py
 ```
 
+训练、play 和验证均直接使用完整 `resources/robots/zgwsarm/zgwsarm.urdf`。
 日常继续训练通常只运行 `train.py`。修改控制器但没有修改资产或候选采样逻辑
 时，至少重新运行静态和动态验证。

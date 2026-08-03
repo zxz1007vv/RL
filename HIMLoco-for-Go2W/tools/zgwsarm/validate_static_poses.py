@@ -17,7 +17,7 @@ from legged_gym.envs.zgwt_arm.zgwt_arm_dynamics import ZgwtArmDynamics
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_ASSET = ROOT / "resources/robots/zgwsarm/zgwsarm_train.urdf"
+DEFAULT_ASSET = ROOT / "resources/robots/zgwsarm/zgwsarm.urdf"
 DEFAULT_INPUT = ROOT / "config/robots/zgwsarm/arm_pose_candidates.csv"
 DEFAULT_OUTPUT = ROOT / "config/robots/zgwsarm/arm_safe_static_poses.csv"
 ARM_NAMES = [f"ROBOT_ARM_JOINT{i}" for i in range(1, 7)]

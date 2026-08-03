@@ -155,7 +155,7 @@ class TestZGWTArmDynamics(unittest.TestCase):
             / "resources"
             / "robots"
             / "zgwsarm"
-            / "zgwsarm_train.urdf"
+            / "zgwsarm.urdf"
         )
         cls.model = DYNAMICS.ZgwtArmDynamics.from_urdf(
             str(urdf),

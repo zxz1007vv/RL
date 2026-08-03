@@ -22,7 +22,8 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
         )
 
     class asset(ZGWTDanceCfg.asset):
-        file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/zgwsarm/zgwsarm_train.urdf"
+        # 训练和 play 统一加载带完整 STL visual 的组合模型。
+        file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/zgwsarm/zgwsarm.urdf"
         name = "zgwsarm"
         # Isaac Gym 中 0 表示启用资产自碰撞过滤，1 表示全部禁用。
         self_collisions = 0
@@ -183,13 +184,14 @@ class ZGWTDanceArmCfgPPO(ZGWTDanceCfgPPO):
         save_interval = 250
         max_iterations = 20000
         resume = True
-        reset_iteration_on_load = True
+        # ArmStandV1 已完成首轮训练；当前默认加载本阶段 checkpoint，续训时
+        # 保留原迭代号和 Adam 状态。首次从 stage1v4 创建本阶段时的设置已结束。
+        reset_iteration_on_load = False
         load_actor_only = False
-        load_optimizer = False
-        load_experiment_name = "ZGWT_DANCE"
-        # 用户已明确 stage1v4 的 800 代较好，以它作为带臂阶段父模型。
-        load_run = "Jul31_14-10-28_stage1v4"
-        checkpoint = 800
+        load_optimizer = True
+        load_experiment_name = "ZGWT_DANCE_ARM"
+        load_run = "Jul31_18-46-40_armstandv1"
+        checkpoint = 20000
 
 
 class ZGWTDanceArmStaticCfg(ZGWTDanceArmCfg):
@@ -207,3 +209,6 @@ class ZGWTDanceArmStaticCfgPPO(ZGWTDanceArmCfgPPO):
         load_experiment_name = "ZGWT_DANCE_ARM"
         load_run = -1
         checkpoint = -1
+        # 新阶段只继承网络权重，从第 0 代开始，并重置 Adam。
+        reset_iteration_on_load = True
+        load_optimizer = False

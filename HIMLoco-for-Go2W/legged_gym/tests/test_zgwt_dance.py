@@ -101,6 +101,83 @@ class TestZGWTDanceMath(unittest.TestCase):
         }
         self.assertTrue(forbidden.isdisjoint(assignments))
 
+    def test_first_stage_uses_near_full_arm_payload(self):
+        dance = self._dance_config_node()
+        domain_rand = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.ClassDef) and node.name == "domain_rand"
+        )
+        payload_range = next(
+            ast.literal_eval(node.value)
+            for node in domain_rand.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "payload_mass_range"
+        )
+        self.assertGreater(payload_range[0], 0.0)
+        self.assertGreaterEqual(payload_range[1], payload_range[0])
+
+        assignments = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in domain_rand.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+        }
+        com_min = assignments["equivalent_payload_com_min"]
+        com_max = assignments["equivalent_payload_com_max"]
+        self.assertEqual(len(com_min), 3)
+        self.assertEqual(len(com_max), 3)
+        self.assertTrue(all(low < high for low, high in zip(com_min, com_max)))
+        self.assertNotIn("equivalent_payload_com", assignments)
+        self.assertNotIn("com_displacement_delta", assignments)
+
+    def test_first_stage_birth_and_target_height_contract(self):
+        dance = self._dance_config_node()
+        init_state = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.ClassDef) and node.name == "init_state"
+        )
+        birth_position = next(
+            ast.literal_eval(node.value)
+            for node in init_state.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "pos"
+        )
+
+        rewards = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.ClassDef) and node.name == "rewards"
+        )
+        default_height = next(
+            ast.literal_eval(node.value)
+            for node in rewards.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "default_body_height"
+        )
+
+        commands = self._commands_config_node()
+        ranges = next(
+            node
+            for node in commands.body
+            if isinstance(node, ast.ClassDef) and node.name == "ranges"
+        )
+        command_height = next(
+            ast.literal_eval(node.value)
+            for node in ranges.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "body_height"
+        )
+
+        self.assertEqual(birth_position[2], 0.55)
+        self.assertEqual(default_height, 0.48)
+        self.assertEqual(command_height, [0.48, 0.48])
+
     def test_reward_scales_are_the_only_geometry_weights(self):
         dance = self._dance_config_node()
         rewards = next(
@@ -131,9 +208,24 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertEqual(scale_values["tracking_lin_vx"], 4.0)
         self.assertEqual(scale_values["tracking_lin_vy"], 4.0)
         self.assertEqual(scale_values["stance_coordination"], 4.0)
+        self.assertEqual(scale_values["feet_outward"], 0.0)
         self.assertNotIn("tracking_body_orientation", scale_values)
         self.assertNotIn("neutral_joint_pose", scale_values)
         self.assertNotIn("action_smoothness", scale_values)
+
+        reward_values = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in rewards.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertEqual(reward_values["feet_anchor_deadzone"], 0.010)
+        self.assertEqual(
+            reward_values["feet_position_tracking_sigma"], 0.0004
+        )
+        self.assertEqual(
+            reward_values["max_foot_position_tracking_sigma"], 0.000225
+        )
 
     def test_reward_dispatch_is_inherited_from_legged_robot(self):
         path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
@@ -160,6 +252,158 @@ class TestZGWTDanceMath(unittest.TestCase):
         }
         self.assertFalse(
             any(name.endswith("REWARD_NAMES") for name in assignment_names)
+        )
+
+    def test_pd_to_rl_takeover_is_not_implemented(self):
+        config_path = (
+            Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_config.py"
+        )
+        robot_path = (
+            Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        )
+        combined_source = config_path.read_text(encoding="utf-8")
+        combined_source += robot_path.read_text(encoding="utf-8")
+        for forbidden in (
+            "pd_equivalent_actions",
+            "takeover_blend",
+            "takeover_elapsed",
+            "takeover_duration",
+            "_sample_takeover_duration",
+            "history_reset_pending",
+        ):
+            self.assertNotIn(forbidden, combined_source)
+
+    def test_feet_outward_penalty_ignores_deadzone_and_inward_motion(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        method = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_feet_outward_excess"
+        )
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(body=[method], type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+
+        rewards = type("Rewards", (), {"feet_outward_deadzone": 0.015})
+        config = type("Config", (), {"rewards": rewards})
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = config
+        dummy.episode_start_yaw = torch.zeros(1)
+        dummy.episode_start_feet_xy = torch.zeros(1, 4, 2)
+        dummy.feet_outward_sign = torch.tensor([[-1.0, 1.0, -1.0, 1.0]])
+        dummy.feet_pos = torch.zeros(1, 4, 3)
+        dummy.feet_pos[0, :, 1] = torch.tensor([-0.035, 0.025, 0.035, -0.025])
+
+        excess = namespace["_feet_outward_excess"](dummy)
+        torch.testing.assert_close(
+            excess,
+            torch.tensor([[0.020, 0.010, 0.0, 0.0]]),
+        )
+
+        # 四只脚共同横移不会改变支撑形状，不应由外八项重复惩罚。
+        dummy.feet_pos[:, :, 1] = 0.10
+        translated_excess = namespace["_feet_outward_excess"](dummy)
+        torch.testing.assert_close(
+            translated_excess, torch.zeros_like(translated_excess)
+        )
+
+    def test_support_stability_uses_each_world_foot_anchor(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        methods = {
+            node.name: node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        support_source = ast.dump(methods["_reward_support_stability"])
+        self.assertIn("_feet_anchor_excess", support_source)
+        self.assertIn("max_foot_position_tracking_sigma", support_source)
+        self.assertIn("support_min_contact_force", support_source)
+        self.assertNotIn("_support_center_drift", support_source)
+        self.assertNotIn("_support_anchor_excess", methods)
+
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(
+                    body=[methods["_feet_anchor_excess"]],
+                    type_ignores=[],
+                ),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+        rewards = type("Rewards", (), {"feet_anchor_deadzone": 0.01})
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = type("Config", (), {"rewards": rewards})
+        dummy.episode_start_feet_xy = torch.zeros(1, 4, 2)
+        dummy.feet_pos = torch.zeros(1, 4, 3)
+        dummy.feet_pos[0, :, 0] = torch.tensor([0.005, 0.02, 0.03, 0.04])
+
+        excess = namespace["_feet_anchor_excess"](dummy)
+        torch.testing.assert_close(
+            excess,
+            torch.tensor([[0.0, 0.01, 0.02, 0.03]]),
+        )
+
+    def test_abad_outward_penalty_uses_left_and_right_joint_direction(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        method = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_abad_outward_excess"
+        )
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(body=[method], type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+
+        rewards = type("Rewards", (), {"abad_outward_deadzone": 0.03})
+        config = type("Config", (), {"rewards": rewards})
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = config
+        dummy.feet_abad_indices = torch.tensor([0, 1, 2, 3])
+        dummy.feet_outward_sign = torch.tensor([[-1.0, 1.0, -1.0, 1.0]])
+        dummy.default_dof_pos = torch.zeros(1, 4)
+        dummy._current_roll_pitch = lambda: (torch.zeros(1), torch.zeros(1))
+        # FAR、FBL 向外，RAR、RBL 向内；左右两侧使用相反关节符号。
+        dummy.dof_pos = torch.tensor([[-0.13, 0.08, 0.20, -0.20]])
+
+        excess = namespace["_abad_outward_excess"](dummy)
+        torch.testing.assert_close(
+            excess,
+            torch.tensor([[0.10, 0.05, 0.0, 0.0]]),
         )
 
     def test_severe_support_loss_is_a_termination_condition(self):

@@ -647,7 +647,7 @@ if __name__ == '__main__':
         body_yaw=0.05,
         body_roll=0.0,
         body_pitch=0.0,
-        body_height=0.54,
+        body_height=0.48,
         dance_trajectory=False,
         evaluation_duration=None,
         # 设置为 None 时将一直运行，直到 Ctrl+C 或关闭 viewer。

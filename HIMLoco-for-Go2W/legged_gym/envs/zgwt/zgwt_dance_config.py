@@ -4,6 +4,10 @@ from .zgwt_config import ZGWTRoughCfg, ZGWTRoughCfgPPO
 class ZGWTDanceCfg(ZGWTRoughCfg):
     """Stationary body-pose tracking task for ZGWT dance motions."""
 
+    class init_state(ZGWTRoughCfg.init_state):
+        # 出生时保留 0.55 m 的安全离地高度，进入控制后再跟踪 0.48 m。
+        pos = [0.0, 0.0, 0.55]
+
     class asset(ZGWTRoughCfg.asset):
         # 纯狗舞蹈任务使用物理等价的轻量显示资产：惯性、关节和 collision
         # 与原始 URDF 完全一致，只用 primitive visual 代替 123 MB STL。
@@ -56,18 +60,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         max_abs_pitch = 0.26
         min_height = 0.40
 
-        # ============================================================
-        # MANUAL TRAINING STAGE / 人工训练阶段（唯一生效配置区）
-        #
-        # 每完成一个阶段：
-        # 1. 保存 checkpoint
-        # 2. 修改下面的 mode_probabilities 和 ranges
-        # 3. 设置 runner.resume = True
-        # 4. 加载上一个阶段 checkpoint
-        #
-        # 不要修改 observation、action、command 顺序和核心 reward。
-        # 程序运行期间不会自动改变概率、范围、噪声或随机化。
-        # ============================================================
+
 
         # 模式顺序固定为：
         # 0 neutral, 1 height, 2 roll, 3 pitch, 4 yaw,
@@ -76,53 +69,26 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
 
-        # 上一阶段：standv2（带窄范围动力学随机化的稳定站立）。
-        # mode_probabilities = [
-        #     1.0,
-        #     0.0, 0.0, 0.0, 0.0,
-        #     0.0, 0.0, 0.0, 0.0,
-        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        # ]
 
-        # 当前启用：Stage 0A，固定等效机械臂负载下的中立站立。
         mode_probabilities = [
-            1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0,
+            0.40, 0.0, 0.20, 0.20, 0.20,
+            0.00, 0.00, 0.00, 0.00,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
 
-        # 阶段 2 推荐值（完整姿态，height 不与姿态混合）：
-        # mode_probabilities = [
-        #     0.15, 0.10, 0.10, 0.10, 0.10, 0.10,
-        #     0.10, 0.10, 0.15,
-        #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        # ]
-        # ranges: yaw +/-0.10, roll/pitch +/-0.26, height 0.40~0.54。
 
-        # 阶段 3/4 推荐值（完整 height 混合；阶段 4 只额外开启窄随机化）：
-        # mode_probabilities = [
-        #     0.08, 0.08, 0.04, 0.04, 0.04,
-        #     0.05, 0.05, 0.05, 0.12,
-        #     0.05, 0.05, 0.05, 0.06, 0.06, 0.06, 0.12,
-        # ]
-        # ranges: yaw +/-0.10, roll/pitch +/-0.26, height 0.40~0.54。
 
         class ranges:
             # Linear velocity remains zero. body_yaw is a bounded angle relative
             # to the heading captured at episode reset, not a continuous turn rate.
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
-            # 阶段 0：
-            # body_yaw = [0.0, 0.0]
-            # body_roll = [0.0, 0.0]
-            # body_pitch = [0.0, 0.0]
-            # body_height = [0.54, 0.54]
 
-            # 当前启用：Stage 0A。
-            body_yaw = [0.0, 0.0]
-            body_roll = [0.0, 0.0]
-            body_pitch = [0.0, 0.0]
-            body_height = [0.54, 0.54]
+
+            body_yaw = [-0.03, 0.03]
+            body_roll = [-0.08, 0.08]
+            body_pitch = [-0.08, 0.08]
+            body_height = [0.48, 0.48]
 
             # 阶段 2、3、4：
             # body_yaw = [-0.10, 0.10]
@@ -131,19 +97,15 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_height = [0.40, 0.54]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        # 当前启用：Stage 0A。完整组合 URDF 的连接件、机械臂和工具总质量为
-        # 6.507 kg；home 姿态下其质心在 BASE_LINK 坐标系约为
-        # [-0.1742, 0.0012, 0.2422] m。环境会根据实际 payload 质量计算
-        # 合并到 base 刚体后应使用的 COM 偏移，使质量与偏心力矩保持关联。
         randomize_payload_mass = True
-        payload_mass_range = [0, 7]
+        # 第一阶段只训练接近完整机械臂的持续重载，不再让大量轻载环境稀释
+        # 满载下的屈腿承压和防外八梯度。
+        payload_mass_range = [6.0, 10.0]
         randomize_com_displacement = True
         correlate_payload_and_com = True
-        equivalent_payload_com = [-0.1742, 0.0012, 0.2422]
-        # 基础采样器生成三个独立的 [-1, 1] 随机数，再按各轴范围缩放。
-        # Stage 0A 不加残差；Stage 0B 可改为 [0.008, 0.005, 0.008]。
+        equivalent_payload_com_min = [-0.4, -0.05, 0.2]  #质心偏移，考虑机械臂的位置主要在-x +z
+        equivalent_payload_com_max = [-0.2, 0.05, 0.5]
         com_displacement_range = [-1.0, 1.0]
-        com_displacement_delta = [0.0, 0.0, 0.0]
         com_displacement_is_offset = True
         randomize_link_mass = False
         link_mass_range = [1.0, 1.0]
@@ -189,7 +151,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # 稳定
             body_stability = 3.0
             stance_coordination = 4.0
-            support_stability = 3.0
+            support_stability = 3.0  #约束轮足世界坐标和有效接触
+           
 
             # 平滑
             action_rate = -0.01  #惩罚action变化
@@ -231,10 +194,15 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         stance_hip_x = [0.272, 0.272, -0.272, -0.272]
         stance_hip_y = [0.104, -0.104, 0.104, -0.104]
 
-        support_position_tracking_sigma = 0.001
-        support_anchor_deadzone = 0.010
         support_min_contact_force = 5.0
         support_contact_sigma = 0.25
+
+        # 单独约束每只轮足相对出生锚点向身体外侧滑动，避免四脚对称外八时
+        # 支撑中心保持不变，从而绕过 support_stability。
+        feet_outward_deadzone = 0.005
+        feet_outward_sigma = 0.0004
+        abad_outward_deadzone = 0.050
+        abad_outward_sigma = 0.010
 
         # 仅供 episode diagnostics 判断命令是否激活。
         active_orientation_threshold = 0.03
@@ -242,12 +210,13 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         active_height_threshold = 0.02
         neutral_command_sigma = 0.20
 
-        # 以下足端锚定参数只供 diagnostics 和旧 checkpoint 对照使用。
-        feet_position_tracking_sigma = 0.003
-        max_foot_position_tracking_sigma = 0.001
-        feet_anchor_deadzone = 0.015
+        # 四个轮足在 episode 初始世界坐标附近保持驻足。平均项约束整体滑动，
+        # 最大项专门捕捉单轮异常；1 cm 死区过滤接触求解器的小幅抖动。
+        feet_position_tracking_sigma = 0.0004
+        max_foot_position_tracking_sigma = 0.000225
+        feet_anchor_deadzone = 0.010
 
-        default_body_height = 0.54
+        default_body_height = 0.48   # 带臂时允许四腿主动屈曲，以较低姿态承压
         hard_min_height = 0.36
         hard_tilt = 0.45
         termination_tilt = 0.55
@@ -255,27 +224,20 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         severe_wheel_park_error = 0.35
         severe_support_loss_distance = 0.20
 
-        # 接管不改变 observation/action 维度。零 action 对应当前默认 PD 目标；
-        # 若部署 PD 目标不同，按 (q_pd-q_default)/action_scale 填入该列表。
-        takeover_blend_enabled = True
-        takeover_blend_duration_range = [0.40, 0.80]
-        pd_equivalent_actions = [0.0] * 16
-
-
 class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
     class policy(ZGWTRoughCfgPPO.policy):
         init_noise_std = 0.15
 
     class algorithm(ZGWTRoughCfgPPO.algorithm):
-        # stage1v3 从 stage1v2 的早期最佳点做短程载荷鲁棒性微调。
-        # 进一步降低学习率和 clip，避免重复出现约 2000 次更新后的策略退化。
-        learning_rate = 2.5e-5
+        # 当前短阶段需要尽快跳出旧的高站姿和外八局部最优；固定学习率只提高
+        # 一倍，并继续使用小 clip、梯度裁剪和 1000 次上限约束更新风险。
+        learning_rate = 5.0e-5
         # Adaptive scheduling raised 1e-4 to 6.67e-3 around iteration 500 in
         # the failed run, after which value loss jumped above 1e3.
         schedule = "fixed"
         desired_kl = 0.01
         entropy_coef = 0.0
-        min_action_std = 0.05
+        min_action_std = 0.08
         max_action_std = 0.25
         clip_param = 0.08
         max_grad_norm = 0.5
@@ -283,9 +245,9 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage0a_equivalent_load"
-        # 固定负载阶段应频繁评估，不默认选择最终 checkpoint。
-        save_interval = 200
+        run_name = "stage1_v2_8.4"
+        # 小范围姿态阶段频繁保存，优先检查 400/800/1200。
+        save_interval = 100
         max_iterations = 10000
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
         # 可保留 actor/critic/estimator，optimizer 是否保留应做短对照。
@@ -302,5 +264,5 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         load_actor_only = True
         # 同时重置 Adam，避免旧 reward 的优化器动量污染新阶段。
         load_optimizer = False
-        load_run = "Jul30_14-54-33_stage1v2"
-        checkpoint = 4750
+        load_run = "Aug04_15-12-15_stage0a_h48"
+        checkpoint = 1600

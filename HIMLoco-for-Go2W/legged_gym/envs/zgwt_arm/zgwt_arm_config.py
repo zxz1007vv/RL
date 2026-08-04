@@ -42,7 +42,7 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             body_yaw = [0.0, 0.0]
             body_roll = [0.0, 0.0]
             body_pitch = [0.0, 0.0]
-            body_height = [0.54, 0.54]
+            body_height = [0.48, 0.48]
 
     # 完整机械臂沿用相同四类语义，只提高带臂阶段的姿态、高度和支撑权重。
     class rewards(ZGWTDanceCfg.rewards):
@@ -57,6 +57,7 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             body_stability = 3.0
             stance_coordination = 4.0
             support_stability = 4.0
+            feet_outward = -2.0
 
             action_rate = -0.01
 

@@ -8,7 +8,7 @@
 
 - 原 `tracking_body_orientation` 在 `_tracking_cost()` 中把 projected gravity 的 x/y 误差求和，roll 与 pitch 无法分开诊断。再与 yaw、height 做加权平均时，一个轴的严重错误会被其他三个较好轴稀释。
 - `tracking_lin_vx`、`tracking_lin_vy` 现在独立启用并跟踪固定零命令，便于直接提高平面防漂移权重和分轴诊断；`body_stability` 不再重复计算 xy 线速度，只负责 z 线速度与角速度。
-- 原 `tracking_support_position`、`tracking_feet_position`、`tracking_max_foot_position` 都在表达足端锚定。后两项与第一项明显重叠，而且精确锁住每只轮心会妨碍姿态命令所需的小范围支撑调整。
+- 原支撑中心约束无法发现四脚对称外八或单轮滑动。当前把四个轮足的 episode 初始世界坐标作为 soft anchor；机身仍可围绕固定支撑完成小范围姿态和高度跟踪。
 - 原 `feet_contact` 与足端稳定相关，但作为独立 hard penalty 会把接触求解器抖动直接放大。它已并入 `support_stability` 的接触缺失成本。
 - 原 `neutral_joint_pose = sum(abs(q-q_default))` 无法区分四腿共模下蹲和单腿差模折叠，并会直接阻碍主动 height 命令，Stage 0 删除。
 - 原 `action_rate` 与 `action_smoothness` 分别是一阶、二阶动作差分；当前带载站立阶段同时使用会重复限制策略的快速承载反应。Stage 0 只保留 `action_rate`。
@@ -52,18 +52,6 @@ reward = task_tracking + stance_stability + control_quality + safety_constraints
 
 根据组合 URDF 计算，连接件、机械臂和工具总质量为 `6.5071195 kg`；home 姿态下这部分质心在 `BASE_LINK` 坐标系约为 `[-0.1742, 0.0012, 0.2422] m`。当前 `_process_rigid_body_props()` 用质量加权公式把 payload 与 base COM 偏移绑定，不再独立采样一个三轴大立方体。
 
-### 1.4 PD 到 RL 接管诊断
-
-原训练 reset 后立即执行 RL action，`last_actions` 被置零，history 中可能含上一个 episode 或零帧；没有显式覆盖真实 PD 已承载平衡后的接管过程。当前最小实现已经：
-
-- 用 `pd_equivalent_actions` 定义部署 PD 目标对应的 action；当前全零表示 PD 目标与 `default_dof_pos` 相同；
-- 每个 episode 随机采样 `0.40～0.80 s` 混合时间；
-- reset 时把 current/last/last-last action 对齐到 PD equivalent action；
-- reset 后用当前真实 observation 填满六帧 history；
-- 执行 `lerp(pd_equivalent_action, policy_action, blend)`。
-
-这解决了最小接口分布偏移，但还不等价于“机械臂负载下先由 PD 动态收敛 1～2 秒”。完整机械臂 Stage 0C 应进一步保存或在线生成 PD 平衡状态，并把真实 PD warmup 的六帧历史交给策略；若机械臂控制器在切换时有瞬态，也必须在完整模型中复现。
-
 ## 2. 最终四类 reward 表
 
 | 类别 | Reward | 处理 | 说明 |
@@ -77,10 +65,10 @@ reward = task_tracking + stance_stability + control_quality + safety_constraints
 | Stance Stability | `yaw_rate` | 合并 | 并入 `body_stability` |
 | Stance Stability | `feet_vertical_motion` | 合并/删除 | 机身速度与接触稳定已覆盖，Stage 0 不单列 |
 | Stance Stability | `stance_coordination` | 新增 | 区分共模压缩与差模折叠，排除 wheel joint |
-| Stance Stability | `tracking_support_position` | 修改/合并 | 并入 `support_stability` |
+| Stance Stability | `tracking_support_position` | diagnostics/终止 | 支撑中心只用于整体漂移诊断和严重支撑丢失终止 |
 | Stance Stability | `feet_contact` | 合并 | 作为 `support_stability` 内部接触成本 |
-| Stance Stability | `tracking_feet_position` | diagnostics | 保留函数和漂移日志，不参与 Stage 0 优化 |
-| Stance Stability | `tracking_max_foot_position` | diagnostics | 保留最大单轮漂移日志 |
+| Stance Stability | `tracking_feet_position` | 修改/合并 | 四轮平均世界坐标漂移并入 `support_stability` |
+| Stance Stability | `tracking_max_foot_position` | 修改/合并 | 最大单轮世界坐标漂移并入 `support_stability` |
 | Stance Stability | `neutral_joint_pose` | 删除 | 会惩罚协调下蹲，不能识别单腿折叠 |
 | Safety Constraints | `feet_stumble` | diagnostics/删除 | 平地 Stage 0 不需要；障碍任务再启用 |
 | Safety Constraints | `severe_support_loss` | 保留并终止 | 支撑中心漂移超过 0.20 m 时给 hard penalty 并结束 episode |
@@ -201,13 +189,15 @@ R_coord = exp(-C_coord / 0.0004)
 ### 4.5 Support stability
 
 ```text
-d_support = relu(||support_xy-support_xy_reset|| - 0.010)
+d_i = ||foot_xy_i-foot_xy_i_reset||
+e_i = relu(d_i - 0.010)
 c_i = clip((5N-Fz_i)/5N, 0, 1)
-C_support = d_support²/0.001 + mean(c_i²)/0.25
+C_support = mean(e_i²)/0.0004 + max(e_i)²/0.000225
+          + mean(c_i²)/0.25
 R_support = exp(-C_support)
 ```
 
-支撑中心负责整体漂移，接触缺失负责避免单轮长期离地；个别轮心的漂移仅记录 diagnostics。
+轮足 anchor 使用世界坐标而非机身相对坐标，因此不会把正常的机身 yaw、roll、pitch 和 height 变化当作足端误差。平均项约束四足整体滑动，最大项捕捉单轮异常，接触缺失项避免单轮长期离地。支撑中心仅保留 diagnostics 和严重支撑丢失终止。
 
 ### 4.6 Action rate
 
@@ -247,7 +237,6 @@ friction_range = [0.75, 0.90]
 - `_reward_support_stability()`；
 - hard low-height、hard tilt、termination；
 - payload/COM 物理关联；
-- PD→RL action blend 和 reset history 初始化；
 - height deficit、腿长 spread、协调残差 p95、body/support score 等 episode diagnostics。
 
 relative yaw 的 reset 参考、command 顺序、wheel action mask 均保持不变。
@@ -289,10 +278,10 @@ relative yaw 的 reset 参考、command 顺序、wheel action mask 均保持不�
 - Kp/Kd：先固定；站稳后只加约 ±5% Kp、±10% Kd。
 - Noise：先关闭，最终加入与部署一致的低幅噪声。
 - Checkpoint：从 0B 只加载 actor/estimator，重置 critic、optimizer、iteration。
-- 进入指标：home 和代表性姿态库均通过 30 s；PD warmup→0.4～0.8 s RL blend 无明显高度阶跃；arm control reaction 下不出现单腿折叠。
+- 进入指标：home 和代表性姿态库均通过 30 s；arm control reaction 下不出现单腿折叠。
 - 预算：可把约 15%～25% 用于 0A、45%～60% 用于 0B、15%～30% 用于 0C；这是吞吐和失败模式驱动的起点，不是固定规律。
 
-纯狗＋等效质量/COM 能覆盖总重量、静态重力偏心力矩和一部分粗略基座惯量变化；不能准确覆盖各连杆姿态相关惯量、机械臂运动引起的动量交换、关节控制器反作用力和接管瞬态。因此机械臂若会运动或主动输出力矩，最终必须用完整模型微调。
+纯狗＋等效质量/COM 能覆盖总重量、静态重力偏心力矩和一部分粗略基座惯量变化；不能准确覆盖各连杆姿态相关惯量、机械臂运动引起的动量交换和关节控制器反作用力。因此机械臂若会运动或主动输出力矩，最终必须用完整模型微调。
 
 ### Stage 1：小范围单轴姿态
 
@@ -312,14 +301,13 @@ relative yaw 的 reset 参考、command 顺序、wheel action mask 均保持不�
 
 ## 7. 最小消融实验
 
-所有实验固定 seed 集合、训练步数和评估负载网格，记录 fall rate、height deficit ratio、p95 coordination residual、四腿 extension spread、torque/action saturation 和 PD→RL 最低高度。
+所有实验固定 seed 集合、训练步数和评估负载网格，记录 fall rate、height deficit ratio、p95 coordination residual、四腿 extension spread 和 torque/action saturation。
 
 | 实验 | 唯一变化 | 预期现象 | 判断标准 |
 |---|---|---|---|
 | A：COM 强度 | 0B 窄关联 COM vs 独立三轴 ±8 cm | 大立方体组更易学出扭曲姿态，训练方差和最差分位失败上升 | 若宽 COM 组 residual、单侧折叠率显著更高，说明随机化过强 |
 | B：协调项 | `stance_coordination=4` vs `0` | 无协调项仍可能追踪高度，但超载时单腿/单侧先折叠 | 在相近 height error 下比较 extension spread 和折叠事件 |
 | C：控制约束 | 当前仅 action rate vs 同时加较强 torque、action smoothness | 过强组力矩使用下降，但承载高度和恢复速度变差 | torque 下降同时 deficit/fall 明显上升即为过强 |
-| D：完整臂耦合 | 等效负载 vs 完整臂 home/姿态库 | home 静态接近，但臂伸展或运动时等效模型误差增大 | 仅完整臂出现的倾斜、振荡或接管失败说明动态耦合未覆盖 |
-| E：接管分布 | blend＋history 初始化 vs 立即 RL＋旧 history | 立即接管组在前 1 s 高度阶跃、action spike 和跌倒更多 | 比较接管后 0～1 s 最低高度、最大 action rate 和 fall rate |
+| D：完整臂耦合 | 等效负载 vs 完整臂 home/姿态库 | home 静态接近，但臂伸展或运动时等效模型误差增大 | 仅完整臂出现的倾斜或振荡说明动态耦合未覆盖 |
 
 每次消融只改变表中一个因素。若 A、B、C 同时变化，即使结果改善也无法判断是训练分布、协调偏好还是控制限制造成的。

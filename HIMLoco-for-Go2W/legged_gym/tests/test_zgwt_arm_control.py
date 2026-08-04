@@ -299,6 +299,12 @@ class TestZGWTArmControl(unittest.TestCase):
         self.assertEqual(assignment_value(arm_config, "kp"), [500.0] * 6)
         self.assertEqual(assignment_value(arm_config, "kd"), [45.0] * 6)
 
+        commands = class_node(armstand_v1, "commands")
+        ranges = class_node(commands, "ranges")
+        self.assertEqual(
+            assignment_value(ranges, "body_height"), [0.48, 0.48]
+        )
+
         pose_library_stage = class_node(tree, "ZGWTDanceArmPoseLibraryCfg")
         aligned_arm = class_node(pose_library_stage, "arm")
         self.assertEqual(assignment_value(aligned_arm, "pose_mode"), "library")
@@ -330,6 +336,7 @@ class TestZGWTArmControl(unittest.TestCase):
         )
         self.assertEqual(assignment_value(scales, "tracking_body_height"), 9.0)
         self.assertEqual(assignment_value(scales, "stance_coordination"), 4.0)
+        self.assertEqual(assignment_value(scales, "feet_outward"), -2.0)
 
         domain_rand = class_node(armstand_v1, "domain_rand")
         self.assertTrue(assignment_value(domain_rand, "randomize_link_mass"))

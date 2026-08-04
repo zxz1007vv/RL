@@ -35,6 +35,10 @@ class ZgwtDance(Zgwt):
         super()._init_buffers()
         self.payload = created_payload
         self.com_displacement = created_com_displacement
+        if not hasattr(self, "equivalent_payload_com_samples"):
+            self.equivalent_payload_com_samples = torch.zeros(
+                self.num_envs, 3, dtype=torch.float, device=self.device
+            )
         if not hasattr(self, "policy_dof_indices"):
             self.policy_dof_indices = torch.arange(
                 self.num_actions, dtype=torch.long, device=self.device
@@ -108,65 +112,42 @@ class ZgwtDance(Zgwt):
             device=self.device,
         ).unsqueeze(0)
 
-        pd_actions = torch.tensor(
-            self.cfg.rewards.pd_equivalent_actions,
-            dtype=torch.float,
-            device=self.device,
+        # feet_pos 按资产刚体顺序排列，当前为 FAR、FBL、RAR、RBL，不能直接
+        # 复用上面的腿协调顺序。根据实际轮足名称生成左右外侧方向。
+        body_names = self.gym.get_actor_rigid_body_names(
+            self.envs[0], self.actor_handles[0]
         )
-        if pd_actions.numel() != self.num_actions:
-            raise ValueError("pd_equivalent_actions 的长度必须等于 num_actions")
-        pd_actions = effective_actions(
-            pd_actions.unsqueeze(0), self.policy_wheel_indices
-        ).squeeze(0)
-        self.pd_equivalent_actions = pd_actions.unsqueeze(0).repeat(
-            self.num_envs, 1
-        )
-        self.takeover_elapsed = torch.zeros(
-            self.num_envs, 1, dtype=torch.float, device=self.device
-        )
-        self.takeover_duration = torch.zeros_like(self.takeover_elapsed)
-        self.history_reset_pending = torch.ones(
-            self.num_envs, dtype=torch.bool, device=self.device
-        )
-        self._sample_takeover_duration(
-            torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+        feet_outward_sign = []
+        feet_abad_indices = []
+        for body_index in self.feet_indices.tolist():
+            foot_name = body_names[body_index]
+            leg_name = foot_name.split("_", maxsplit=1)[0]
+            if foot_name.startswith(("FBL_", "RBL_")):
+                feet_outward_sign.append(1.0)
+            elif foot_name.startswith(("FAR_", "RAR_")):
+                feet_outward_sign.append(-1.0)
+            else:
+                raise ValueError(f"无法判断轮足的左右方向: {foot_name}")
+            abad_name = f"{leg_name}_ABAD_JOINT"
+            if abad_name not in self.dof_names:
+                raise ValueError(f"资产缺少外八计算所需关节: {abad_name}")
+            feet_abad_indices.append(self.dof_names.index(abad_name))
+        self.feet_outward_sign = torch.tensor(
+            feet_outward_sign, dtype=torch.float, device=self.device
+        ).unsqueeze(0)
+        self.feet_abad_indices = torch.tensor(
+            feet_abad_indices, dtype=torch.long, device=self.device
         )
 
     def step(self, actions):
-        """屏蔽轮关节动作，并在 episode 开始时从原 PD 目标平滑接管。"""
+        """屏蔽轮关节策略动作，其余动作直接交给父类控制流程。"""
         if actions.shape != (self.num_envs, self.num_actions):
             raise ValueError(
                 f"expected actions [{self.num_envs}, {self.num_actions}], "
                 f"got {list(actions.shape)}"
             )
         policy_actions = effective_actions(actions, self.policy_wheel_indices)
-        if bool(self.cfg.rewards.takeover_blend_enabled):
-            blend = torch.clamp(
-                self.takeover_elapsed / self.takeover_duration,
-                min=0.0,
-                max=1.0,
-            )
-            executed_actions = torch.lerp(
-                self.pd_equivalent_actions, policy_actions, blend
-            )
-            self.takeover_elapsed += self.dt
-        else:
-            executed_actions = policy_actions
-        return super().step(executed_actions)
-
-    def _sample_takeover_duration(self, env_ids):
-        """为每个 episode 采样接管混合时长，避免固定时序过拟合。"""
-        duration_range = self.cfg.rewards.takeover_blend_duration_range
-        if len(duration_range) != 2 or duration_range[0] <= 0.0:
-            raise ValueError("takeover_blend_duration_range 必须为两个正数")
-        if duration_range[1] < duration_range[0]:
-            raise ValueError("接管混合时长上限不能小于下限")
-        self.takeover_duration[env_ids] = torch_rand_float(
-            duration_range[0],
-            duration_range[1],
-            (len(env_ids), 1),
-            device=self.device,
-        )
+        return super().step(policy_actions)
 
     def _process_rigid_body_props(self, props, env_id):
         """把 payload 质量和等效质心关联成同一个物理样本。"""
@@ -182,24 +163,40 @@ class ZgwtDance(Zgwt):
                 dtype=torch.float,
                 device=self.device,
             )
-            payload_com = torch.tensor(
-                self.cfg.domain_rand.equivalent_payload_com,
+            payload_com_min = torch.tensor(
+                self.cfg.domain_rand.equivalent_payload_com_min,
                 dtype=torch.float,
                 device=self.device,
             )
+            payload_com_max = torch.tensor(
+                self.cfg.domain_rand.equivalent_payload_com_max,
+                dtype=torch.float,
+                device=self.device,
+            )
+            if (
+                payload_com_min.numel() != 3
+                or payload_com_max.numel() != 3
+                or torch.any(payload_com_max <= payload_com_min)
+            ):
+                raise ValueError("等效 payload COM 上下界必须是三个有效范围")
+            sampled_unit = torch.clamp(
+                0.5 * (self.com_displacement[env_id] + 1.0),
+                min=0.0,
+                max=1.0,
+            )
+            payload_com = payload_com_min + sampled_unit * (
+                payload_com_max - payload_com_min
+            )
+            if not hasattr(self, "equivalent_payload_com_samples"):
+                self.equivalent_payload_com_samples = torch.zeros(
+                    self.num_envs, 3, dtype=torch.float, device=self.device
+                )
+            self.equivalent_payload_com_samples[env_id] = payload_com
             # base 刚体的新 COM 是原 base 与等效 payload 的质量加权平均。
             correlated_offset = payload_mass / (
                 base_mass + payload_mass
             ) * (payload_com - nominal_base_com)
-            delta = torch.tensor(
-                self.cfg.domain_rand.com_displacement_delta,
-                dtype=torch.float,
-                device=self.device,
-            )
-            if delta.numel() != 3 or torch.any(delta < 0.0):
-                raise ValueError("com_displacement_delta 必须是三个非负数")
-            sampled_unit = self.com_displacement[env_id]
-            self.com_displacement[env_id] = correlated_offset + sampled_unit * delta
+            self.com_displacement[env_id] = correlated_offset
         return super()._process_rigid_body_props(props, env_id)
 
     def _normalized_probabilities(self, values, label):
@@ -329,15 +326,37 @@ class ZgwtDance(Zgwt):
         max_individual_wheel_drift = torch.mean(
             torch.max(individual_wheel_drift, dim=1).values
         )
+        p95_individual_wheel_drift = torch.quantile(
+            individual_wheel_drift.reshape(-1), 0.95
+        )
+        foot_anchor_excess = self._feet_anchor_excess()[env_ids]
+        mean_foot_anchor_excess = torch.mean(foot_anchor_excess)
+        max_foot_anchor_excess = torch.mean(
+            torch.max(foot_anchor_excess, dim=1).values
+        )
+        feet_outward_excess = self._feet_outward_excess()[env_ids]
+        mean_feet_outward_excess = torch.mean(feet_outward_excess)
+        max_feet_outward_excess = torch.mean(
+            torch.max(feet_outward_excess, dim=1).values
+        )
+        abad_outward_excess = self._abad_outward_excess()[env_ids]
+        mean_abad_outward_excess = torch.mean(abad_outward_excess)
+        max_abad_outward_excess = torch.mean(
+            torch.max(abad_outward_excess, dim=1).values
+        )
 
         fall_rate = torch.mean((~self.time_out_buf[env_ids]).float())
+        foot_vertical_force = self.contact_forces[
+            env_ids[:, None], self.feet_indices, 2
+        ]
         contact_loss_ratio = torch.mean(
             (
-                self.contact_forces[
-                    env_ids[:, None], self.feet_indices, 2
-                ]
-                < 5.0
+                foot_vertical_force
+                < float(self.cfg.rewards.support_min_contact_force)
             ).float()
+        )
+        mean_min_foot_contact_force = torch.mean(
+            torch.min(foot_vertical_force, dim=1).values
         )
         collision_ratio = torch.mean(
             torch.any(
@@ -371,21 +390,16 @@ class ZgwtDance(Zgwt):
                 >= 0.99 * float(self.cfg.normalization.clip_actions)
             ).float()
         )
+        payload_mass = self.payload[env_ids, 0]
+        mean_payload_mass = torch.mean(payload_mass)
+        p10_payload_mass = torch.quantile(payload_mass, 0.10)
+        p90_payload_mass = torch.quantile(payload_mass, 0.90)
+        payload_com = self.equivalent_payload_com_samples[env_ids]
+        mean_payload_com = torch.mean(payload_com, dim=0)
 
         self._resampling_for_reset = True
         super().reset_idx(env_ids)
         self._resampling_for_reset = False
-
-        self.takeover_elapsed[env_ids] = 0.0
-        self._sample_takeover_duration(env_ids)
-        self.history_reset_pending[env_ids] = True
-        self.actions[env_ids] = self.pd_equivalent_actions[env_ids]
-        self.last_actions[env_ids] = self.pd_equivalent_actions[env_ids]
-        self.last_last_actions[env_ids] = self.pd_equivalent_actions[env_ids]
-        if hasattr(self, "delayed_actions"):
-            self.delayed_actions[env_ids] = self.pd_equivalent_actions[
-                env_ids, None, :
-            ]
 
         self.episode_start_xy[env_ids] = self.root_states[env_ids, :2]
         self.episode_start_yaw[env_ids] = self._current_yaw()[env_ids]
@@ -428,6 +442,15 @@ class ZgwtDance(Zgwt):
         episode["max_individual_wheel_drift"] = (
             max_individual_wheel_drift
         )
+        episode["p95_individual_wheel_drift"] = (
+            p95_individual_wheel_drift
+        )
+        episode["mean_foot_anchor_excess"] = mean_foot_anchor_excess
+        episode["max_foot_anchor_excess"] = max_foot_anchor_excess
+        episode["mean_feet_outward_excess"] = mean_feet_outward_excess
+        episode["max_feet_outward_excess"] = max_feet_outward_excess
+        episode["mean_abad_outward_excess"] = mean_abad_outward_excess
+        episode["max_abad_outward_excess"] = max_abad_outward_excess
         episode["mean_height_deficit"] = torch.mean(height_deficit)
         episode["height_deficit_ratio"] = torch.mean(
             (height_deficit > 0.0).float()
@@ -444,10 +467,19 @@ class ZgwtDance(Zgwt):
         )
         episode["fall_rate"] = fall_rate
         episode["contact_loss_ratio"] = contact_loss_ratio
+        episode["mean_min_foot_contact_force"] = (
+            mean_min_foot_contact_force
+        )
         episode["collision_ratio"] = collision_ratio
         episode["joint_limit_hit_ratio"] = joint_limit_hit_ratio
         episode["torque_saturation_ratio"] = torque_saturation_ratio
         episode["action_saturation_ratio"] = action_saturation_ratio
+        episode["mean_payload_mass"] = mean_payload_mass
+        episode["p10_payload_mass"] = p10_payload_mass
+        episode["p90_payload_mass"] = p90_payload_mass
+        episode["mean_payload_com_x"] = mean_payload_com[0]
+        episode["mean_payload_com_y"] = mean_payload_com[1]
+        episode["mean_payload_com_z"] = mean_payload_com[2]
 
     def _resample_commands(self, env_ids):
         if len(env_ids) == 0:
@@ -672,24 +704,13 @@ class ZgwtDance(Zgwt):
 
     def compute_observations(self):
         current_obs = self._build_current_observation(self.add_noise)
-        updated_history = torch.cat(
+        self.obs_buf = torch.cat(
             (
                 current_obs[:, : self.num_one_step_obs],
                 self.obs_buf[:, : -self.num_one_step_obs],
             ),
             dim=-1,
         )
-        pending_ids = self.history_reset_pending.nonzero(
-            as_tuple=False
-        ).flatten()
-        if len(pending_ids) > 0:
-            # reset 后用同一真实帧填满历史，避免混入上一个 episode 或全零历史。
-            current_actor = current_obs[pending_ids, : self.num_one_step_obs]
-            updated_history[pending_ids] = current_actor.repeat(
-                1, self.history_length
-            )
-            self.history_reset_pending[pending_ids] = False
-        self.obs_buf = updated_history
         if self.obs_buf.shape != (self.num_envs, 360):
             raise RuntimeError(f"history observation must be [N, 360], got {list(self.obs_buf.shape)}")
         self.privileged_obs_buf = current_obs[:, : self.num_one_step_privileged_obs]
@@ -844,9 +865,15 @@ class ZgwtDance(Zgwt):
         return score
 
     def _reward_support_stability(self):
-        """奖励稳定的支撑中心和四轮有效接触。"""
-        position_cost = torch.square(self._support_anchor_excess()) / float(
-            self.cfg.rewards.support_position_tracking_sigma
+        """约束每个轮足的世界坐标驻足，并保持四轮有效接触。"""
+        foot_excess = self._feet_anchor_excess()
+        mean_foot_cost = torch.mean(torch.square(foot_excess), dim=1) / float(
+            self.cfg.rewards.feet_position_tracking_sigma
+        )
+        max_foot_cost = torch.square(
+            torch.max(foot_excess, dim=1).values
+        ) / float(
+            self.cfg.rewards.max_foot_position_tracking_sigma
         )
         min_force = float(self.cfg.rewards.support_min_contact_force)
         contact_deficit = torch.clamp(
@@ -858,7 +885,19 @@ class ZgwtDance(Zgwt):
         contact_cost = torch.mean(torch.square(contact_deficit), dim=1) / float(
             self.cfg.rewards.support_contact_sigma
         )
-        return torch.exp(-(position_cost + contact_cost))
+        return torch.exp(-(mean_foot_cost + max_foot_cost + contact_cost))
+
+    def _reward_feet_outward(self):
+        """同时惩罚轮足向外滑动和 ABAD 关节向外展开。"""
+        outward_excess = self._feet_outward_excess()
+        foot_cost = torch.mean(torch.square(outward_excess), dim=1) / float(
+            self.cfg.rewards.feet_outward_sigma
+        )
+        abad_excess = self._abad_outward_excess()
+        abad_cost = torch.mean(torch.square(abad_excess), dim=1) / float(
+            self.cfg.rewards.abad_outward_sigma
+        )
+        return foot_cost + abad_cost
 
     def _leg_extension(self):
         """计算四条腿的髋到轮心等效伸展量，不使用 wheel joint。"""
@@ -899,11 +938,15 @@ class ZgwtDance(Zgwt):
             float(self.cfg.rewards.stance_coordination_sigma),
         )
 
-    def _support_anchor_excess(self):
-        """返回超过支撑中心允许死区的平面漂移量。"""
-        drift = self._support_center_drift()
+    def _feet_anchor_excess(self):
+        """返回四个轮足相对 episode 初始世界坐标超过死区的漂移量。"""
+        foot_drift = torch.norm(
+            self.feet_pos[:, :, :2] - self.episode_start_feet_xy,
+            dim=2,
+        )
         return torch.clamp(
-            drift - float(self.cfg.rewards.support_anchor_deadzone), min=0.0
+            foot_drift - float(self.cfg.rewards.feet_anchor_deadzone),
+            min=0.0,
         )
 
     def _support_center_drift(self):
@@ -911,6 +954,48 @@ class ZgwtDance(Zgwt):
         support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
         return torch.norm(
             support_xy - self.episode_start_support_xy, dim=1
+        )
+
+    def _feet_outward_excess(self):
+        """计算四个轮足超过死区的向外侧位移，返回值单位为米。"""
+        current_support = torch.mean(
+            self.feet_pos[:, :, :2], dim=1, keepdim=True
+        )
+        initial_support = torch.mean(
+            self.episode_start_feet_xy, dim=1, keepdim=True
+        )
+        # 先扣除四脚共同平移，只保留支撑形状本身的变化。
+        displacement = (
+            self.feet_pos[:, :, :2]
+            - current_support
+            - self.episode_start_feet_xy
+            + initial_support
+        )
+        yaw = self.episode_start_yaw.unsqueeze(1)
+        # 将世界坐标位移投影到 episode 出生朝向的机身横向轴。
+        lateral_displacement = (
+            -torch.sin(yaw) * displacement[:, :, 0]
+            + torch.cos(yaw) * displacement[:, :, 1]
+        )
+        outward_displacement = lateral_displacement * self.feet_outward_sign
+        return torch.clamp(
+            outward_displacement
+            - float(self.cfg.rewards.feet_outward_deadzone),
+            min=0.0,
+        )
+
+    def _abad_outward_excess(self):
+        """计算四条腿 ABAD 关节超过死区的向外展开角，返回值单位为弧度。"""
+        abad_position = self.dof_pos[:, self.feet_abad_indices]
+        abad_default = self.default_dof_pos[:, self.feet_abad_indices]
+        roll, _ = self._current_roll_pitch()
+        # 机身 roll 时，四条腿需要约 -roll 的共同 ABAD 补偿才能保持轮足竖直；
+        # 先扣除这部分姿态需求，避免后续舞蹈侧倾命令与防外八目标冲突。
+        abad_residual = abad_position - abad_default + roll.unsqueeze(1)
+        outward_angle = abad_residual * self.feet_outward_sign
+        return torch.clamp(
+            outward_angle - float(self.cfg.rewards.abad_outward_deadzone),
+            min=0.0,
         )
 
     # ------------ reward functions: Control Quality / 控制质量 ------------

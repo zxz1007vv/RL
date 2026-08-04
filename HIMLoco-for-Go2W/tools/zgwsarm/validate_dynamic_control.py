@@ -1,6 +1,6 @@
 """不启动 PPO，验证 ZGWSARM 动态传统控制链路。
 
-从 ArmStandV2 安全姿态库选择一个近邻目标，先做完整插值路径 Jacobian 检查，
+从机械臂安全姿态库选择一个近邻目标，先做完整插值路径 Jacobian 检查，
 再以手动速度限制执行。过程中检查参考速度、参考加速度、力矩、力矩变化率、
 机械臂碰撞导致的 reset 和最终跟踪误差。
 """
@@ -143,6 +143,6 @@ def parse_duration(argv):
 if __name__ == "__main__":
     duration_value = parse_duration(sys.argv)
     core_args = get_args()
-    if core_args.task != "zgwt_dance_arm_static":
-        raise ValueError("--task 必须是 zgwt_dance_arm_static")
+    if core_args.task != "zgwt_dance_arm_pose_library":
+        raise ValueError("--task 必须是 zgwt_dance_arm_pose_library")
     validate(core_args, duration_value)

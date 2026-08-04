@@ -84,7 +84,7 @@ def load_simulation_verified_poses(
     minimum_joint_margin: float,
     minimum_jacobian_sigma: float,
 ) -> List[ArmStaticPose]:
-    """读取可供 ArmStandV2 仿真训练使用的姿态。
+    """读取可供机械臂姿态库适应训练使用的姿态。
 
     ``hardware_verified`` 不参与仿真筛选，也绝不会由本函数自动提升。
     姿态必须同时通过仿真、碰撞和奇异性检查，并再次用契约关节限位复核。
@@ -139,7 +139,7 @@ def load_simulation_verified_poses(
 
     if not accepted:
         raise ValueError(
-            "姿态库中没有可用于 ArmStandV2 的姿态；必须同时满足 "
+            "姿态库中没有可用于机械臂姿态库适应训练的姿态；必须同时满足 "
             "simulation_verified=true、collision_checked=true、"
             "singularity_checked=true、关节余量和 Jacobian 阈值。"
         )

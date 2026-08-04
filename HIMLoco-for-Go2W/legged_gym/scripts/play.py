@@ -84,6 +84,14 @@ def play(
         raise ValueError("infinite_report_interval must be positive")
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    # 训练配置中的 load_run/checkpoint 描述“新阶段从哪个父模型初始化”。
+    # play 未显式指定来源时应评估本 experiment 最新 run 的最新 checkpoint，
+    # 不能继续落回训练阶段的固定父 checkpoint。
+    if args.load_run is None:
+        train_cfg.runner.load_run = -1
+        train_cfg.runner.load_experiment_name = train_cfg.runner.experiment_name
+    if args.checkpoint is None:
+        train_cfg.runner.checkpoint = -1
     # override some parameters for testing
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)     #环境数量上限
     env_cfg.terrain.mesh_type = "plane"
@@ -271,8 +279,18 @@ def play(
         )
         checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
         checkpoint_label = checkpoint_name.split('model_', 1)[-1]
+        loaded_run_directory = os.path.basename(os.path.dirname(checkpoint_path))
+        run_match = re.match(
+            r'^[A-Z][a-z]{2}\d{2}_\d{2}-\d{2}-\d{2}_(.+)$',
+            loaded_run_directory,
+        )
+        actual_run_name = (
+            run_match.group(1)
+            if run_match is not None
+            else loaded_run_directory
+        )
         run_label = re.sub(
-            r'[^A-Za-z0-9_.-]+', '_', str(train_cfg.runner.run_name)
+            r'[^A-Za-z0-9_.-]+', '_', actual_run_name
         ).strip('_.-') or 'unnamed_run'
         export_filename = f'policy_{run_label}_ckpt{checkpoint_label}.pt'
         exported_path = export_policy_as_jit(

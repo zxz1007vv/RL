@@ -4,6 +4,14 @@ from .zgwt_config import ZGWTRoughCfg, ZGWTRoughCfgPPO
 class ZGWTDanceCfg(ZGWTRoughCfg):
     """Stationary body-pose tracking task for ZGWT dance motions."""
 
+    class asset(ZGWTRoughCfg.asset):
+        # 纯狗舞蹈任务使用物理等价的轻量显示资产：惯性、关节和 collision
+        # 与原始 URDF 完全一致，只用 primitive visual 代替 123 MB STL。
+        file = (
+            "{LEGGED_GYM_ROOT_DIR}/resources/robots/zgwt/urdf/"
+            "zgwt_lightweight.urdf"
+        )
+
     class env(ZGWTRoughCfg.env):
         # ang_vel(3) + gravity(3) + commands(6) + q(16) + qd(16) + actions(16)
         num_one_step_observations = 3 + 3 + 6 + 16 + 16 + 16
@@ -76,10 +84,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         #     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         # ]
 
-        # 当前启用：stage1v3（带臂等效载荷下的小范围单轴姿态）。
-        # 保持 stage1v2 的任务分布，只增强持续偏载鲁棒性，不加入组合姿态。
+        # 当前启用：Stage 0A，固定等效机械臂负载下的中立站立。
         mode_probabilities = [
-            0.35, 0.10, 0.20, 0.20, 0.15, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
@@ -111,11 +118,11 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_pitch = [0.0, 0.0]
             # body_height = [0.54, 0.54]
 
-            # 当前启用：stage1v3（范围保持与 stage1v2 相同）。
-            body_yaw = [-0.025, 0.025]
-            body_roll = [-0.08, 0.08]
-            body_pitch = [-0.08, 0.08]
-            body_height = [0.49, 0.54]
+            # 当前启用：Stage 0A。
+            body_yaw = [0.0, 0.0]
+            body_roll = [0.0, 0.0]
+            body_pitch = [0.0, 0.0]
+            body_height = [0.54, 0.54]
 
             # 阶段 2、3、4：
             # body_yaw = [-0.10, 0.10]
@@ -124,37 +131,40 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # body_height = [0.40, 0.54]
 
     class domain_rand(ZGWTRoughCfg.domain_rand):
-        # 当前启用：stage1v3。C++ 带臂接触力对应总质量约 46.4 kg，
-        # 相比训练 URDF 的 41.05 kg 多约 5.35 kg。质量范围保留约 30% 裕量，
-        # 同时扩大 base COM 偏移以覆盖机械臂造成的持续单侧/后向载荷矩。
-        # 暂不叠加 motor、noise、push、delay 或初始状态扰动。
+        # 当前启用：Stage 0A。完整组合 URDF 的连接件、机械臂和工具总质量为
+        # 6.507 kg；home 姿态下其质心在 BASE_LINK 坐标系约为
+        # [-0.1742, 0.0012, 0.2422] m。环境会根据实际 payload 质量计算
+        # 合并到 base 刚体后应使用的 COM 偏移，使质量与偏心力矩保持关联。
         randomize_payload_mass = True
-        payload_mass_range = [0.0, 10.0]
+        payload_mass_range = [0, 7]
         randomize_com_displacement = True
-        # 相对 URDF 名义 base COM 的三轴偏移，每个环境独立采样。
-        com_displacement_range = [-0.05, 0.05]
+        correlate_payload_and_com = True
+        equivalent_payload_com = [-0.1742, 0.0012, 0.2422]
+        # 基础采样器生成三个独立的 [-1, 1] 随机数，再按各轴范围缩放。
+        # Stage 0A 不加残差；Stage 0B 可改为 [0.008, 0.005, 0.008]。
+        com_displacement_range = [-1.0, 1.0]
+        com_displacement_delta = [0.0, 0.0, 0.0]
         com_displacement_is_offset = True
         randomize_link_mass = False
         link_mass_range = [1.0, 1.0]
-        randomize_friction = True
-        # 覆盖当前 MuJoCo 地面 friction=0.8。
-        friction_range = [0.75, 1.15]
+        randomize_friction = False
+        friction_range = [0.8, 0.8]
         randomize_restitution = False
         restitution_range = [0.0, 0.15]
         randomize_motor_strength = False
         motor_strength_range = [0.90, 1.10]
-        randomize_kp = True
-        kp_range = [0.90, 1.10]
-        randomize_kd = True
-        kd_range = [0.90, 1.10]
+        randomize_kp = False
+        kp_range = [1.0, 1.0]
+        randomize_kd = False
+        kd_range = [1.0, 1.0]
         randomize_initial_joint_pos = False
         # Keep recovery diversity without starting from visibly crooked legs.
         initial_joint_pos_range = [0.90, 1.10]
         randomize_initial_base_velocity = False
-        disturbance = True
+        disturbance = False
         disturbance_range = [-5.0, 5.0]
         disturbance_interval = 8
-        push_robots = True
+        push_robots = False
         push_interval_s = 12
         max_push_vel_xy = 1.2
         delay = False
@@ -168,78 +178,88 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
     class rewards(ZGWTRoughCfg.rewards):
         class scales:
-            # Roll and pitch share one target-gravity reward. This avoids a
-            # second "stay level" objective fighting the commanded body pose.
-            tracking_body_orientation = 11.0
+            #跟踪
+            tracking_body_roll = 6.0
+            tracking_body_pitch = 6.0
             tracking_body_yaw = 6.0
             tracking_body_height = 6.0
-            # Hold objectives are gated by command-tracking convergence. Support
-            # centre has priority over exact individual wheel-centre anchoring.
-            tracking_lin_vx = 3.0
-            tracking_lin_vy = 3.0
-            tracking_support_position = 3.0
-            tracking_feet_position = 1.0
-            tracking_max_foot_position = 0.5
+            tracking_lin_vx = 4.0
+            tracking_lin_vy = 4.0
 
-            # Minimal stability, smoothness, and safety terms.
-            yaw_rate = -0.05
+            # 稳定
+            body_stability = 3.0
+            stance_coordination = 4.0
+            support_stability = 3.0
+
+            # 平滑
+            action_rate = -0.01  #惩罚action变化
+
+            # 安全
             collision = -1.0
-            feet_contact = -1.0
-            feet_stumble = -0.1
-            feet_vertical_motion = -0.1
-            action_rate = -0.01
-            action_smoothness = -0.005
-            torques = -8.0e-6
-            neutral_joint_pose = -3.0
             dof_pos_limits = -2.0
-            torque_limits = -0.1
-            severe_wheel_park = -4.0
-            severe_support_loss = -4.0
-
-            # 人工调参建议：动作抖动时，后期可小幅增加 action_rate 或
-            # action_smoothness；每次只改 1～2 项，单次不超过 20%～30%。
+            torque_limits = -0.05
+            severe_wheel_park = -4.0    #轮子驻足
+            severe_support_loss = -4.0  #支撑丢失
+            base_height_too_low = -4.0
+            excessive_tilt = -4.0    #过度倾斜
+            termination = -10.0
 
         only_positive_rewards = False
 
-        # First track the commanded body pose, then tighten stationary support
-        # as tracking converges. Safety/smoothness costs use a floored multiplier.
-        task_reward_scale = 28.0
-        hold_gate_sigma = 0.50
-        auxiliary_reward_sigma = 0.10
-        auxiliary_reward_floor = 0.30
-
-        # scales 是 tracking、hold、soft 和 hard reward 的唯一权重来源。
-        # 父类虽然会统一乘以 dt，但 tracking/hold 加权平均的分子、分母
-        # 使用同一组 dt-scaled weights，公共 dt 会在归一化时抵消。
-        # 足端漂移仍明显时，可小幅提高上方 support/feet 对应的 scale；
-        # 每次只改 1～2 项且不超过 20%～30%。核心 reward 结构或数值尺度
-        # 若发生大改，只加载 actor/estimator，并重置 critic 和 optimizer。
-
-        # reward = exp(-error / sigma). Orientation error is measured between
-        # actual and commanded projected gravity, not against a level body.
-        orientation_tracking_sigma = 0.012
+        # 四类 reward 直接加权求和；下列 sigma 均保持物理量单位。
+        roll_tracking_sigma = 0.012
+        pitch_tracking_sigma = 0.012
         yaw_tracking_sigma = 0.0025
         height_tracking_sigma = 0.0016
+        height_deficit_deadzone = 0.020
+        height_deficit_sigma = 0.0004
+        height_deficit_weight = 1.0
 
-        # Used only by diagnostics and the explicitly neutral-task gate.
+        # 平面零速单轴跟踪和其余机身稳定量的允许尺度。
+        lin_velocity_tracking_sigma = 0.010
+        body_lin_vel_z_sigma = 0.010
+        body_ang_vel_xy_sigma = 0.250
+        body_yaw_rate_sigma = 0.090
+
+        # URDF 中大腿和小腿名义长度分别为 0.26 m、0.28 m。
+        thigh_length = 0.26
+        shank_length = 0.28
+        stance_coordination_deadzone = 0.015
+        stance_command_deadzone_gain = 0.010
+        stance_coordination_sigma = 0.0004
+        # 顺序固定为 FBL、FAR、RBL、RAR，与代码中的膝关节索引一致。
+        stance_hip_x = [0.272, 0.272, -0.272, -0.272]
+        stance_hip_y = [0.104, -0.104, 0.104, -0.104]
+
+        support_position_tracking_sigma = 0.001
+        support_anchor_deadzone = 0.010
+        support_min_contact_force = 5.0
+        support_contact_sigma = 0.25
+
+        # 仅供 episode diagnostics 判断命令是否激活。
         active_orientation_threshold = 0.03
         active_yaw_threshold = 0.02
         active_height_threshold = 0.02
         neutral_command_sigma = 0.20
 
-        # Soft support deadzones retain contact-solver tolerance. Wheel axle
-        # position-hold remains enabled independently in the controller.
+        # 以下足端锚定参数只供 diagnostics 和旧 checkpoint 对照使用。
         feet_position_tracking_sigma = 0.003
-        support_position_tracking_sigma = 0.001
         max_foot_position_tracking_sigma = 0.001
         feet_anchor_deadzone = 0.015
-        support_anchor_deadzone = 0.010
 
         default_body_height = 0.54
+        hard_min_height = 0.36
+        hard_tilt = 0.45
         termination_tilt = 0.55
         termination_min_height = 0.32
         severe_wheel_park_error = 0.35
         severe_support_loss_distance = 0.20
+
+        # 接管不改变 observation/action 维度。零 action 对应当前默认 PD 目标；
+        # 若部署 PD 目标不同，按 (q_pd-q_default)/action_scale 填入该列表。
+        takeover_blend_enabled = True
+        takeover_blend_duration_range = [0.40, 0.80]
+        pd_equivalent_actions = [0.0] * 16
 
 
 class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
@@ -263,13 +283,13 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage1v4"
-        # 本阶段只做短程偏载微调；每 100 次评估一次，不默认选择最终 checkpoint。
+        run_name = "stage0a_equivalent_load"
+        # 固定负载阶段应频繁评估，不默认选择最终 checkpoint。
         save_interval = 200
         max_iterations = 10000
         # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
-        # resume=True, load_actor_only=False, load_optimizer=True。
-        # 仅小幅修改 auxiliary reward 权重：
+        # 可保留 actor/critic/estimator，optimizer 是否保留应做短对照。
+        # 仅小幅修改某个 reward 权重：
         # resume=True, load_actor_only=False, load_optimizer=False。
         # 修改核心 reward、reward 尺度或 privileged observation：
         # resume=True, load_actor_only=True, load_optimizer=False。
@@ -278,10 +298,9 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
         # 人工切换到新训练阶段时只继承模型权重，不继承上一阶段的迭代编号。
         # 同一阶段中断后续训时必须临时改为 False。
         reset_iteration_on_load = True
-        # Use load_actor_only=True for checkpoints predating the 78-D critic
-        # input or the refactored task reward. Actor/estimator shapes stay valid.
-        load_actor_only = False
-        # 保留 actor/critic/estimator 权重，但为增强后的载荷分布重置 Adam 状态。
+        # reward 聚合与 critic 目标已改变，只继承接口仍兼容的 actor/estimator。
+        load_actor_only = True
+        # 同时重置 Adam，避免旧 reward 的优化器动量污染新阶段。
         load_optimizer = False
         load_run = "Jul30_14-54-33_stage1v2"
         checkpoint = 4750

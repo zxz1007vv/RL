@@ -6,7 +6,7 @@
 
 ## 文件职责
 
-- `zgwt_arm_config.py`：ArmStandV1、ArmStandV2-Sim 的环境、完整 reward 和
+- `zgwt_arm_config.py`：固定 Home 站立、机械臂姿态库适应阶段的环境、完整 reward 和
   PPO 配置；带臂 reward 不继承普通鸡头任务，后续调参只修改该文件；
 - `zgwt_arm_robot.py`：22 DOF 资产映射、16 DOF 策略接口、传统机械臂控制和碰撞终止；
 - `zgwt_arm_dynamics.py`：从 URDF 读取质量惯量并执行批量递归 Newton–Euler 逆动力学；

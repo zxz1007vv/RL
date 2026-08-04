@@ -213,25 +213,25 @@ class TestZGWTArmControl(unittest.TestCase):
                 )
                 writer.writeheader()
                 writer.writerow(row)
-            with self.assertRaisesRegex(ValueError, "没有可用于 ArmStandV2"):
+            with self.assertRaisesRegex(ValueError, "没有可用于机械臂姿态库"):
                 UTILS.load_simulation_verified_poses(
                     str(path), self.LOWER, self.UPPER, 0.15, 0.02
                 )
 
-    def test_static_task_uses_library_and_samples_only_on_reset(self):
+    def test_pose_library_task_samples_only_on_reset(self):
         env_dir = Path(__file__).parents[1] / "envs" / "zgwt_arm"
         config_tree = ast.parse(
             (env_dir / "zgwt_arm_config.py").read_text(encoding="utf-8")
         )
-        static_config = next(
+        pose_library_config = next(
             node
             for node in config_tree.body
             if isinstance(node, ast.ClassDef)
-            and node.name == "ZGWTDanceArmStaticCfg"
+            and node.name == "ZGWTDanceArmPoseLibraryCfg"
         )
         arm_config = next(
             node
-            for node in static_config.body
+            for node in pose_library_config.body
             if isinstance(node, ast.ClassDef) and node.name == "arm"
         )
         pose_mode = next(
@@ -299,8 +299,8 @@ class TestZGWTArmControl(unittest.TestCase):
         self.assertEqual(assignment_value(arm_config, "kp"), [500.0] * 6)
         self.assertEqual(assignment_value(arm_config, "kd"), [45.0] * 6)
 
-        armstand_v2 = class_node(tree, "ZGWTDanceArmStaticCfg")
-        aligned_arm = class_node(armstand_v2, "arm")
+        pose_library_stage = class_node(tree, "ZGWTDanceArmPoseLibraryCfg")
+        aligned_arm = class_node(pose_library_stage, "arm")
         self.assertEqual(assignment_value(aligned_arm, "pose_mode"), "library")
 
         ppo = class_node(tree, "ZGWTDanceArmCfgPPO")
@@ -312,27 +312,33 @@ class TestZGWTArmControl(unittest.TestCase):
         self.assertTrue(assignment_value(runner, "load_actor_only"))
         self.assertFalse(assignment_value(runner, "load_optimizer"))
 
-        armstand_v2_ppo = class_node(tree, "ZGWTDanceArmStaticCfgPPO")
-        aligned_runner = class_node(armstand_v2_ppo, "runner")
+        pose_library_ppo = class_node(tree, "ZGWTDanceArmPoseLibraryCfgPPO")
+        aligned_runner = class_node(pose_library_ppo, "runner")
         self.assertEqual(
             assignment_value(aligned_runner, "run_name"),
-            "armstandv2_aligned",
+            "armstand_pose_library_aligned_v1",
         )
         self.assertEqual(assignment_value(aligned_runner, "checkpoint"), 20000)
 
         rewards = class_node(armstand_v1, "rewards")
         scales = class_node(rewards, "scales")
         self.assertEqual(
-            assignment_value(scales, "neutral_abduction_pose"), -4.0
+            assignment_value(scales, "tracking_body_roll"), 6.5
         )
-        self.assertEqual(assignment_value(scales, "neutral_joint_pose"), -5.0)
+        self.assertEqual(
+            assignment_value(scales, "tracking_body_pitch"), 6.5
+        )
         self.assertEqual(assignment_value(scales, "tracking_body_height"), 9.0)
+        self.assertEqual(assignment_value(scales, "stance_coordination"), 4.0)
 
         domain_rand = class_node(armstand_v1, "domain_rand")
         self.assertTrue(assignment_value(domain_rand, "randomize_link_mass"))
         self.assertEqual(
             assignment_value(domain_rand, "com_displacement_range"),
             [-0.015, 0.015],
+        )
+        self.assertFalse(
+            assignment_value(domain_rand, "correlate_payload_and_com")
         )
         self.assertEqual(
             assignment_value(domain_rand, "motor_strength_range"),

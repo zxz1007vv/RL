@@ -9,12 +9,12 @@ from .zgwt_robot import Zgwt
 from .zgwt_dance_config import ZGWTDanceCfg
 from .zgwt_dance_utils import (
     effective_actions,
-    floored_soft_multiplier,
+    height_tracking_score,
+    leg_extension_from_knee,
     low_pass_alpha,
-    neutral_command_weight,
     normalize_dance_commands,
     select_wheel_factors,
-    target_projected_gravity,
+    stance_coordination_score,
 )
 
 
@@ -27,48 +27,14 @@ class ZgwtDance(Zgwt):
     PITCH_COMMAND = 4
     HEIGHT_COMMAND = 5
 
-    # Pose commands are the primary task. Stationary support is tightened only
-    # after the commanded pose is approached; all remaining terms are costs.
-    TRACK_REWARD_NAMES = frozenset(
-        {
-            "tracking_body_orientation",
-            "tracking_body_yaw",
-            "tracking_body_height",
-        }
-    )
-    HOLD_REWARD_NAMES = frozenset(
-        {
-            "tracking_lin_vx",
-            "tracking_lin_vy",
-            "tracking_support_position",
-            "tracking_feet_position",
-            "tracking_max_foot_position",
-        }
-    )
-    SOFT_REWARD_NAMES = frozenset(
-        {
-            "yaw_rate",
-            "feet_vertical_motion",
-            "action_rate",
-            "action_smoothness",
-            "torques",
-            "neutral_joint_pose",
-        }
-    )
-    HARD_REWARD_NAMES = frozenset(
-        {
-            "collision",
-            "feet_contact",
-            "feet_stumble",
-            "dof_pos_limits",
-            "torque_limits",
-            "severe_wheel_park",
-            "severe_support_loss",
-        }
-    )
-
     def _init_buffers(self):
+        # 父类会在环境创建后再次采样 payload/COM，但不会把第二次样本写回
+        # PhysX。先保存真正用于创建刚体的样本，初始化其余 buffer 后再恢复。
+        created_payload = self.payload.clone()
+        created_com_displacement = self.com_displacement.clone()
         super()._init_buffers()
+        self.payload = created_payload
+        self.com_displacement = created_com_displacement
         if not hasattr(self, "policy_dof_indices"):
             self.policy_dof_indices = torch.arange(
                 self.num_actions, dtype=torch.long, device=self.device
@@ -120,14 +86,121 @@ class ZgwtDance(Zgwt):
             self.cfg.commands.mode_probabilities, "manual"
         )
 
+        # 协调性按 FBL、FAR、RBL、RAR 的膝关节计算，轮关节天然被排除。
+        leg_order = ("FBL", "FAR", "RBL", "RAR")
+        knee_indices = []
+        for leg_name in leg_order:
+            joint_name = f"{leg_name}_KNEE_JOINT"
+            if joint_name not in self.dof_names:
+                raise ValueError(f"资产缺少协调性计算所需关节: {joint_name}")
+            knee_indices.append(self.dof_names.index(joint_name))
+        self.stance_knee_indices = torch.tensor(
+            knee_indices, dtype=torch.long, device=self.device
+        )
+        self.stance_hip_x = torch.tensor(
+            self.cfg.rewards.stance_hip_x,
+            dtype=torch.float,
+            device=self.device,
+        ).unsqueeze(0)
+        self.stance_hip_y = torch.tensor(
+            self.cfg.rewards.stance_hip_y,
+            dtype=torch.float,
+            device=self.device,
+        ).unsqueeze(0)
+
+        pd_actions = torch.tensor(
+            self.cfg.rewards.pd_equivalent_actions,
+            dtype=torch.float,
+            device=self.device,
+        )
+        if pd_actions.numel() != self.num_actions:
+            raise ValueError("pd_equivalent_actions 的长度必须等于 num_actions")
+        pd_actions = effective_actions(
+            pd_actions.unsqueeze(0), self.policy_wheel_indices
+        ).squeeze(0)
+        self.pd_equivalent_actions = pd_actions.unsqueeze(0).repeat(
+            self.num_envs, 1
+        )
+        self.takeover_elapsed = torch.zeros(
+            self.num_envs, 1, dtype=torch.float, device=self.device
+        )
+        self.takeover_duration = torch.zeros_like(self.takeover_elapsed)
+        self.history_reset_pending = torch.ones(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._sample_takeover_duration(
+            torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+        )
+
     def step(self, actions):
-        """Discard policy wheel channels before delay, control, reward and history."""
+        """屏蔽轮关节动作，并在 episode 开始时从原 PD 目标平滑接管。"""
         if actions.shape != (self.num_envs, self.num_actions):
             raise ValueError(
                 f"expected actions [{self.num_envs}, {self.num_actions}], "
                 f"got {list(actions.shape)}"
             )
-        return super().step(effective_actions(actions, self.policy_wheel_indices))
+        policy_actions = effective_actions(actions, self.policy_wheel_indices)
+        if bool(self.cfg.rewards.takeover_blend_enabled):
+            blend = torch.clamp(
+                self.takeover_elapsed / self.takeover_duration,
+                min=0.0,
+                max=1.0,
+            )
+            executed_actions = torch.lerp(
+                self.pd_equivalent_actions, policy_actions, blend
+            )
+            self.takeover_elapsed += self.dt
+        else:
+            executed_actions = policy_actions
+        return super().step(executed_actions)
+
+    def _sample_takeover_duration(self, env_ids):
+        """为每个 episode 采样接管混合时长，避免固定时序过拟合。"""
+        duration_range = self.cfg.rewards.takeover_blend_duration_range
+        if len(duration_range) != 2 or duration_range[0] <= 0.0:
+            raise ValueError("takeover_blend_duration_range 必须为两个正数")
+        if duration_range[1] < duration_range[0]:
+            raise ValueError("接管混合时长上限不能小于下限")
+        self.takeover_duration[env_ids] = torch_rand_float(
+            duration_range[0],
+            duration_range[1],
+            (len(env_ids), 1),
+            device=self.device,
+        )
+
+    def _process_rigid_body_props(self, props, env_id):
+        """把 payload 质量和等效质心关联成同一个物理样本。"""
+        if bool(
+            getattr(
+                self.cfg.domain_rand, "correlate_payload_and_com", False
+            )
+        ):
+            payload_mass = self.payload[env_id, 0]
+            base_mass = float(self.default_rigid_body_mass[0])
+            nominal_base_com = torch.tensor(
+                [props[0].com.x, props[0].com.y, props[0].com.z],
+                dtype=torch.float,
+                device=self.device,
+            )
+            payload_com = torch.tensor(
+                self.cfg.domain_rand.equivalent_payload_com,
+                dtype=torch.float,
+                device=self.device,
+            )
+            # base 刚体的新 COM 是原 base 与等效 payload 的质量加权平均。
+            correlated_offset = payload_mass / (
+                base_mass + payload_mass
+            ) * (payload_com - nominal_base_com)
+            delta = torch.tensor(
+                self.cfg.domain_rand.com_displacement_delta,
+                dtype=torch.float,
+                device=self.device,
+            )
+            if delta.numel() != 3 or torch.any(delta < 0.0):
+                raise ValueError("com_displacement_delta 必须是三个非负数")
+            sampled_unit = self.com_displacement[env_id]
+            self.com_displacement[env_id] = correlated_offset + sampled_unit * delta
+        return super()._process_rigid_body_props(props, env_id)
 
     def _normalized_probabilities(self, values, label):
         probabilities = torch.tensor(
@@ -196,6 +269,19 @@ class ZgwtDance(Zgwt):
         height_abs_error = torch.abs(
             self.commands[env_ids, self.HEIGHT_COMMAND] - height[env_ids]
         )
+        height_deficit = torch.relu(
+            self.commands[env_ids, self.HEIGHT_COMMAND]
+            - height[env_ids]
+            - float(self.cfg.rewards.height_deficit_deadzone)
+        )
+        _, coordination_residual = self._stance_coordination_score_and_residual()
+        coordination_abs = torch.abs(coordination_residual[env_ids])
+        leg_extension = self._leg_extension()[env_ids]
+        extension_spread = torch.max(leg_extension, dim=1).values - torch.min(
+            leg_extension, dim=1
+        ).values
+        body_stability_score = self._reward_body_stability()[env_ids]
+        support_stability_score = self._reward_support_stability()[env_ids]
 
         roll_active = (
             torch.abs(self.pose_command_targets[env_ids, 0])
@@ -224,10 +310,15 @@ class ZgwtDance(Zgwt):
             )
         )
         support_xy = torch.mean(self.feet_pos[env_ids, :, :2], dim=1)
-        support_xy_drift = torch.mean(
-            torch.norm(
-                support_xy - self.episode_start_support_xy[env_ids], dim=1
-            )
+        support_drift = torch.norm(
+            support_xy - self.episode_start_support_xy[env_ids], dim=1
+        )
+        support_xy_drift = torch.mean(support_drift)
+        support_loss_termination_rate = torch.mean(
+            (
+                support_drift
+                > float(self.cfg.rewards.severe_support_loss_distance)
+            ).float()
         )
         individual_wheel_drift = torch.norm(
             self.feet_pos[env_ids, :, :2]
@@ -238,18 +329,6 @@ class ZgwtDance(Zgwt):
         max_individual_wheel_drift = torch.mean(
             torch.max(individual_wheel_drift, dim=1).values
         )
-
-        aux_episode_mean = torch.zeros(
-            len(env_ids), dtype=torch.float, device=self.device
-        )
-        if "aux_multiplier" in self.episode_sums:
-            elapsed = torch.clamp(
-                self.episode_length_buf[env_ids].float() * self.dt,
-                min=self.dt,
-            )
-            aux_episode_mean = (
-                self.episode_sums["aux_multiplier"][env_ids] / elapsed
-            )
 
         fall_rate = torch.mean((~self.time_out_buf[env_ids]).float())
         contact_loss_ratio = torch.mean(
@@ -297,6 +376,17 @@ class ZgwtDance(Zgwt):
         super().reset_idx(env_ids)
         self._resampling_for_reset = False
 
+        self.takeover_elapsed[env_ids] = 0.0
+        self._sample_takeover_duration(env_ids)
+        self.history_reset_pending[env_ids] = True
+        self.actions[env_ids] = self.pd_equivalent_actions[env_ids]
+        self.last_actions[env_ids] = self.pd_equivalent_actions[env_ids]
+        self.last_last_actions[env_ids] = self.pd_equivalent_actions[env_ids]
+        if hasattr(self, "delayed_actions"):
+            self.delayed_actions[env_ids] = self.pd_equivalent_actions[
+                env_ids, None, :
+            ]
+
         self.episode_start_xy[env_ids] = self.root_states[env_ids, :2]
         self.episode_start_yaw[env_ids] = self._current_yaw()[env_ids]
         self.wheel_park_targets[env_ids] = self.dof_pos[
@@ -331,13 +421,26 @@ class ZgwtDance(Zgwt):
         )
         episode["mean_xy_drift"] = xy_drift
         episode["mean_support_xy_drift"] = support_xy_drift
+        episode["support_loss_termination_rate"] = (
+            support_loss_termination_rate
+        )
         episode["mean_feet_xy_drift"] = feet_xy_drift
         episode["max_individual_wheel_drift"] = (
             max_individual_wheel_drift
         )
-        episode["aux_multiplier_mean"] = torch.mean(aux_episode_mean)
-        episode["aux_multiplier_p05"] = torch.quantile(
-            aux_episode_mean, 0.05
+        episode["mean_height_deficit"] = torch.mean(height_deficit)
+        episode["height_deficit_ratio"] = torch.mean(
+            (height_deficit > 0.0).float()
+        )
+        episode["mean_leg_extension_spread"] = torch.mean(extension_spread)
+        episode["p95_coordination_residual"] = torch.quantile(
+            coordination_abs.reshape(-1), 0.95
+        )
+        episode["mean_body_stability_score"] = torch.mean(
+            body_stability_score
+        )
+        episode["mean_support_stability_score"] = torch.mean(
+            support_stability_score
         )
         episode["fall_rate"] = fall_rate
         episode["contact_loss_ratio"] = contact_loss_ratio
@@ -567,132 +670,26 @@ class ZgwtDance(Zgwt):
             )
         return privileged_obs
 
-    def _prepare_reward_function(self):
-        super()._prepare_reward_function()
-        primary_reward_names = self.TRACK_REWARD_NAMES | self.HOLD_REWARD_NAMES
-        positive_auxiliary = [
-            name
-            for name in self.reward_names
-            if self.reward_scales[name] > 0
-            and name not in primary_reward_names
-        ]
-        if positive_auxiliary:
-            raise ValueError(
-                "positive dance rewards must be declared as task terms: "
-                + ", ".join(positive_auxiliary)
-            )
-        configured = set(self.reward_names)
-        classified = (
-            self.TRACK_REWARD_NAMES
-            | self.HOLD_REWARD_NAMES
-            | self.SOFT_REWARD_NAMES
-            | self.HARD_REWARD_NAMES
-        )
-        unclassified = configured - classified
-        if unclassified:
-            raise ValueError(
-                "dance rewards must be explicitly classified: "
-                + ", ".join(sorted(unclassified))
-            )
-        if float(self.cfg.rewards.hold_gate_sigma) <= 0.0:
-            raise ValueError("hold_gate_sigma must be positive")
-        auxiliary_floor = float(self.cfg.rewards.auxiliary_reward_floor)
-        if not 0.0 <= auxiliary_floor <= 1.0:
-            raise ValueError("auxiliary_reward_floor must be in [0, 1]")
-        for name in (
-            "command_tracking",
-            "stationary_hold",
-            "hold_gate",
-            "aux_multiplier",
-            "hard_safety",
-            "final_task",
-        ):
-            self.episode_sums[name] = torch.zeros(
-                self.num_envs, dtype=torch.float, device=self.device
-            )
-
-    def compute_reward(self):
-        """Task * soft multiplier + hard safety + terminal penalty."""
-        tracking_cost = torch.zeros_like(self.rew_buf)
-        hold_cost = torch.zeros_like(self.rew_buf)
-        soft_reward = torch.zeros_like(self.rew_buf)
-        hard_safety_penalty = torch.zeros_like(self.rew_buf)
-        tracking_weight_sum = 0.0
-        hold_weight_sum = 0.0
-
-        for name, reward_function in zip(
-            self.reward_names, self.reward_functions
-        ):
-            if name in self.TRACK_REWARD_NAMES:
-                weight = abs(float(self.reward_scales[name]))
-                cost = self._tracking_cost(name)
-                tracking_cost += weight * cost
-                tracking_weight_sum += weight
-                self.episode_sums[name] += torch.exp(-cost) * self.dt
-            elif name in self.HOLD_REWARD_NAMES:
-                weight = abs(float(self.reward_scales[name]))
-                cost = self._hold_cost(name)
-                hold_cost += weight * cost
-                hold_weight_sum += weight
-                self.episode_sums[name] += torch.exp(-cost) * self.dt
-            else:
-                raw_reward = reward_function()
-                scaled_reward = raw_reward * self.reward_scales[name]
-                self.episode_sums[name] += scaled_reward
-                if name in self.SOFT_REWARD_NAMES:
-                    soft_reward += scaled_reward
-                elif name in self.HARD_REWARD_NAMES:
-                    hard_safety_penalty += scaled_reward
-
-        if tracking_weight_sum <= 0.0 or hold_weight_sum <= 0.0:
-            raise RuntimeError("dance task requires tracking and hold rewards")
-
-        tracking_cost /= tracking_weight_sum
-        hold_cost /= hold_weight_sum
-        tracking_score = torch.exp(-tracking_cost)
-        hold_score = torch.exp(-hold_cost)
-        hold_gate = torch.exp(
-            -tracking_cost / float(self.cfg.rewards.hold_gate_sigma)
-        )
-        task_score = tracking_score * (
-            (1.0 - hold_gate) + hold_gate * hold_score
-        )
-        auxiliary_multiplier = floored_soft_multiplier(
-            soft_reward,
-            float(self.cfg.rewards.auxiliary_reward_sigma),
-            float(self.cfg.rewards.auxiliary_reward_floor),
-        )
-        task_reward = (
-            float(self.cfg.rewards.task_reward_scale) * self.dt * task_score
-        )
-        self.rew_buf[:] = (
-            task_reward * auxiliary_multiplier + hard_safety_penalty
-        )
-        self.episode_sums["command_tracking"] += tracking_score * self.dt
-        self.episode_sums["stationary_hold"] += hold_score * self.dt
-        self.episode_sums["hold_gate"] += hold_gate * self.dt
-        self.episode_sums["aux_multiplier"] += auxiliary_multiplier * self.dt
-        self.episode_sums["hard_safety"] += hard_safety_penalty
-        self.episode_sums["final_task"] += self.rew_buf
-
-        # Keep terminal failure outside the multiplier, as in the base task.
-        if "termination" in self.reward_scales:
-            termination_reward = (
-                self._reward_termination()
-                * self.reward_scales["termination"]
-            )
-            self.rew_buf += termination_reward
-            self.episode_sums["termination"] += termination_reward
-
     def compute_observations(self):
         current_obs = self._build_current_observation(self.add_noise)
-        self.obs_buf = torch.cat(
+        updated_history = torch.cat(
             (
                 current_obs[:, : self.num_one_step_obs],
                 self.obs_buf[:, : -self.num_one_step_obs],
             ),
             dim=-1,
         )
+        pending_ids = self.history_reset_pending.nonzero(
+            as_tuple=False
+        ).flatten()
+        if len(pending_ids) > 0:
+            # reset 后用同一真实帧填满历史，避免混入上一个 episode 或全零历史。
+            current_actor = current_obs[pending_ids, : self.num_one_step_obs]
+            updated_history[pending_ids] = current_actor.repeat(
+                1, self.history_length
+            )
+            self.history_reset_pending[pending_ids] = False
+        self.obs_buf = updated_history
         if self.obs_buf.shape != (self.num_envs, 360):
             raise RuntimeError(f"history observation must be [N, 360], got {list(self.obs_buf.shape)}")
         self.privileged_obs_buf = current_obs[:, : self.num_one_step_privileged_obs]
@@ -743,20 +740,16 @@ class ZgwtDance(Zgwt):
         max_tilt = float(self.cfg.rewards.termination_tilt)
         excessive_tilt = self.projected_gravity[:, 2] > -math.cos(max_tilt)
         too_low = self._current_base_height() < self.cfg.rewards.termination_min_height
-        self.reset_buf |= excessive_tilt | too_low
+        support_lost = self._support_center_drift() > float(
+            self.cfg.rewards.severe_support_loss_distance
+        )
+        self.reset_buf |= excessive_tilt | too_low | support_lost
 
     def _current_roll_pitch(self):
         gravity = self.projected_gravity
         pitch = torch.asin(torch.clamp(gravity[:, 0], -1.0, 1.0))
         roll = torch.atan2(-gravity[:, 1], -gravity[:, 2])
         return roll, pitch
-
-    def _target_projected_gravity(self):
-        """Gravity vector expected in the body frame at commanded roll/pitch."""
-        return target_projected_gravity(
-            self.commands[:, self.ROLL_COMMAND],
-            self.commands[:, self.PITCH_COMMAND],
-        )
 
     def _current_yaw(self):
         quat = self.root_states[:, 3:7]
@@ -788,163 +781,164 @@ class ZgwtDance(Zgwt):
         """Mean over an active command subset, safe when a batch has none."""
         return torch.sum(values * mask) / torch.clamp(torch.sum(mask), min=1.0)
 
-    def _tracking_cost(self, name):
-        """Direct normalized squared costs; no log(exp()) reconstruction."""
-        if name == "tracking_body_orientation":
-            error = torch.sum(
-                torch.square(
-                    self.projected_gravity[:, :2]
-                    - self._target_projected_gravity()[:, :2]
-                ),
-                dim=1,
-            )
-            return error / float(self.cfg.rewards.orientation_tracking_sigma)
-        if name == "tracking_body_yaw":
-            return torch.square(self._body_yaw_error()) / float(
-                self.cfg.rewards.yaw_tracking_sigma
-            )
-        if name == "tracking_body_height":
-            error = self._current_base_height() - self.commands[:, self.HEIGHT_COMMAND]
-            return torch.square(error) / float(
-                self.cfg.rewards.height_tracking_sigma
-            )
-        raise KeyError(name)
+    # ------------ reward functions: Task Tracking / 任务跟踪 ------------
+    def _reward_tracking_body_roll(self):
+        """跟踪机身 roll 命令。"""
+        roll, _ = self._current_roll_pitch()
+        error = torch.square(roll - self.commands[:, self.ROLL_COMMAND])
+        return torch.exp(-error / float(self.cfg.rewards.roll_tracking_sigma))
 
-    def _hold_cost(self, name):
-        if name == "tracking_lin_vx":
-            return torch.square(self.base_lin_vel[:, 0]) / float(
-                self.cfg.rewards.tracking_sigma
-            )
-        if name == "tracking_lin_vy":
-            return torch.square(self.base_lin_vel[:, 1]) / float(
-                self.cfg.rewards.tracking_sigma
-            )
-        if name == "tracking_support_position":
-            return torch.square(self._support_anchor_excess()) / float(
-                self.cfg.rewards.support_position_tracking_sigma
-            )
-        if name == "tracking_feet_position":
-            return self._reward_feet_position_drift() / float(
-                self.cfg.rewards.feet_position_tracking_sigma
-            )
-        if name == "tracking_max_foot_position":
-            return self._reward_max_foot_position_drift() / float(
-                self.cfg.rewards.max_foot_position_tracking_sigma
-            )
-        raise KeyError(name)
-
-    def _reward_tracking_body_orientation(self):
-        error = torch.sum(
-            torch.square(
-                self.projected_gravity[:, :2]
-                - self._target_projected_gravity()[:, :2]
-            ),
-            dim=1,
-        )
-        return torch.exp(-error / self.cfg.rewards.orientation_tracking_sigma)
+    def _reward_tracking_body_pitch(self):
+        """跟踪机身 pitch 命令。"""
+        _, pitch = self._current_roll_pitch()
+        error = torch.square(pitch - self.commands[:, self.PITCH_COMMAND])
+        return torch.exp(-error / float(self.cfg.rewards.pitch_tracking_sigma))
 
     def _reward_tracking_body_yaw(self):
+        """跟踪相对 episode 初始朝向的 yaw 角度。"""
         error = torch.square(self._body_yaw_error())
-        return torch.exp(-error / self.cfg.rewards.yaw_tracking_sigma)
+        return torch.exp(-error / float(self.cfg.rewards.yaw_tracking_sigma))
 
     def _reward_tracking_body_height(self):
-        error = torch.square(
-            self._current_base_height() - self.commands[:, self.HEIGHT_COMMAND]
+        """跟踪当前高度命令，并额外惩罚超过死区的向下塌陷。"""
+        return height_tracking_score(
+            self._current_base_height(),
+            self.commands[:, self.HEIGHT_COMMAND],
+            float(self.cfg.rewards.height_tracking_sigma),
+            float(self.cfg.rewards.height_deficit_deadzone),
+            float(self.cfg.rewards.height_deficit_sigma),
+            float(self.cfg.rewards.height_deficit_weight),
         )
-        return torch.exp(-error / self.cfg.rewards.height_tracking_sigma)
 
-    def _reward_support_center_drift(self):
-        return torch.square(self._support_anchor_excess())
-
-    def _reward_tracking_support_position(self):
-        """Primary stationary reference; tighter than individual wheel anchors."""
-        error = torch.square(self._support_anchor_excess())
+    # ------------ reward functions: Stance Stability / 站姿稳定 ------------
+    def _reward_tracking_lin_vx(self):
+        """跟踪 x 方向零速度命令，防止机器人前后漂移。"""
+        error = torch.square(self.commands[:, 0] - self.base_lin_vel[:, 0])
         return torch.exp(
-            -error / self.cfg.rewards.support_position_tracking_sigma
+            -error / float(self.cfg.rewards.lin_velocity_tracking_sigma)
+        )
+
+    def _reward_tracking_lin_vy(self):
+        """跟踪 y 方向零速度命令，防止机器人左右漂移。"""
+        error = torch.square(self.commands[:, 1] - self.base_lin_vel[:, 1])
+        return torch.exp(
+            -error / float(self.cfg.rewards.lin_velocity_tracking_sigma)
+        )
+
+    def _reward_body_stability(self):
+        """抑制竖直速度和机身角速度，平面速度由分轴 tracking 负责。"""
+        cost = torch.square(self.base_lin_vel[:, 2]) / float(
+            self.cfg.rewards.body_lin_vel_z_sigma
+        )
+        cost += torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) / float(
+            self.cfg.rewards.body_ang_vel_xy_sigma
+        )
+        cost += torch.square(self.base_ang_vel[:, 2]) / float(
+            self.cfg.rewards.body_yaw_rate_sigma
+        )
+        return torch.exp(-cost)
+
+    def _reward_stance_coordination(self):
+        """允许四腿共模压缩，惩罚单腿或单侧差模折叠。"""
+        score, _ = self._stance_coordination_score_and_residual()
+        return score
+
+    def _reward_support_stability(self):
+        """奖励稳定的支撑中心和四轮有效接触。"""
+        position_cost = torch.square(self._support_anchor_excess()) / float(
+            self.cfg.rewards.support_position_tracking_sigma
+        )
+        min_force = float(self.cfg.rewards.support_min_contact_force)
+        contact_deficit = torch.clamp(
+            (min_force - self.contact_forces[:, self.feet_indices, 2])
+            / min_force,
+            min=0.0,
+            max=1.0,
+        )
+        contact_cost = torch.mean(torch.square(contact_deficit), dim=1) / float(
+            self.cfg.rewards.support_contact_sigma
+        )
+        return torch.exp(-(position_cost + contact_cost))
+
+    def _leg_extension(self):
+        """计算四条腿的髋到轮心等效伸展量，不使用 wheel joint。"""
+        return leg_extension_from_knee(
+            self.dof_pos[:, self.stance_knee_indices],
+            float(self.cfg.rewards.thigh_length),
+            float(self.cfg.rewards.shank_length),
+        )
+
+    def _expected_extension_differential(self):
+        """计算 roll/pitch 命令在平地上需要的四腿伸展量差。"""
+        roll = self.commands[:, self.ROLL_COMMAND].unsqueeze(1)
+        pitch = self.commands[:, self.PITCH_COMMAND].unsqueeze(1)
+        hip_height_offset = (
+            -torch.sin(pitch) * self.stance_hip_x
+            + torch.cos(pitch) * torch.sin(roll) * self.stance_hip_y
+        )
+        return hip_height_offset - torch.mean(
+            hip_height_offset, dim=1, keepdim=True
+        )
+
+    def _stance_coordination_score_and_residual(self):
+        """分离四腿的共模压缩和扣除姿态命令后的差模残差。"""
+        roll_ratio = torch.abs(
+            self.commands[:, self.ROLL_COMMAND]
+        ) / float(self.cfg.commands.max_abs_roll)
+        pitch_ratio = torch.abs(
+            self.commands[:, self.PITCH_COMMAND]
+        ) / float(self.cfg.commands.max_abs_pitch)
+        deadzone = float(self.cfg.rewards.stance_coordination_deadzone)
+        deadzone += float(
+            self.cfg.rewards.stance_command_deadzone_gain
+        ) * (roll_ratio + pitch_ratio)
+        return stance_coordination_score(
+            self._leg_extension(),
+            self._expected_extension_differential(),
+            deadzone.unsqueeze(1),
+            float(self.cfg.rewards.stance_coordination_sigma),
         )
 
     def _support_anchor_excess(self):
-        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
-        drift = torch.norm(
-            support_xy - self.episode_start_support_xy, dim=1
-        )
+        """返回超过支撑中心允许死区的平面漂移量。"""
+        drift = self._support_center_drift()
         return torch.clamp(
             drift - float(self.cfg.rewards.support_anchor_deadzone), min=0.0
         )
 
-    def _feet_anchor_excess(self):
-        drift = torch.norm(
-            self.feet_pos[:, :, :2] - self.episode_start_feet_xy, dim=2
-        )
-        return torch.clamp(
-            drift - float(self.cfg.rewards.feet_anchor_deadzone), min=0.0
-        )
-
-    def _reward_feet_position_drift(self):
-        """Penalize meaningful support movement, not contact jitter."""
-        return torch.sum(torch.square(self._feet_anchor_excess()), dim=1)
-
-    def _reward_tracking_feet_position(self):
-        """Dense bonus for keeping all four wheel centers at their reset points."""
-        error = self._reward_feet_position_drift()
-        return torch.exp(
-            -error / self.cfg.rewards.feet_position_tracking_sigma
+    def _support_center_drift(self):
+        """计算支撑中心相对 episode 初始位置的平面漂移。"""
+        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
+        return torch.norm(
+            support_xy - self.episode_start_support_xy, dim=1
         )
 
-    def _reward_tracking_max_foot_position(self):
-        """Do not let one drifting wheel hide behind the four-wheel average."""
-        error = self._reward_max_foot_position_drift()
-        return torch.exp(
-            -error / self.cfg.rewards.max_foot_position_tracking_sigma
+    # ------------ reward functions: Control Quality / 控制质量 ------------
+    def _reward_action_rate(self):
+        """惩罚相邻控制步的动作变化。"""
+        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
+
+    # ------------ reward functions: Safety Constraints / 安全约束 ------------
+    def _reward_collision(self):
+        """惩罚非足端刚体与地面发生碰撞。"""
+        contact = torch.norm(
+            self.contact_forces[:, self.penalised_contact_indices, :], dim=-1
         )
+        return torch.sum((contact > 0.1).float(), dim=1)
 
-    def _reward_max_foot_position_drift(self):
-        """Prevent one wheel from moving while the other three hide the average."""
-        drift_sq = torch.square(self._feet_anchor_excess())
-        return torch.max(drift_sq, dim=1).values
+    def _reward_dof_pos_limits(self):
+        """惩罚关节位置超出软限位。"""
+        lower = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.0)
+        upper = (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.0)
+        return torch.sum(lower + upper, dim=1)
 
-    def _reward_yaw_rate(self):
-        """Settle at the requested body-yaw angle instead of continuously turning."""
-        return torch.square(self.base_ang_vel[:, 2])
-
-    def _reward_feet_vertical_motion(self):
-        """Suppress wheel lift and vertical chatter during body poses."""
-        contact = (
-            self.contact_forces[:, self.feet_indices, 2] > 5.0
-        ).float()
-        return torch.sum(
-            contact * torch.square(self.feet_vel[:, :, 2]), dim=1
-        )
-
-    def _reward_neutral_joint_pose(self):
-        """Keep a symmetric nominal stance only near the neutral pose command."""
-        neutral_weight = self._neutral_pose_weight()
-
-        joint_error = (
-            self.dof_pos[:, self.policy_dof_indices]
-            - self.default_dof_pos[:, self.policy_dof_indices]
-        )
-        joint_error = joint_error.clone()
-        joint_error[:, self.policy_wheel_indices] = 0.0
-        return torch.sum(torch.abs(joint_error), dim=1) * neutral_weight
-
-    def _neutral_pose_weight(self):
-        """Continuous gate based on filtered commands, never raw targets."""
-        normalized = self.commands.clone()
-        normalized[:, 2] = self.commands[:, 2]
-        normalized = normalize_dance_commands(
-            normalized,
-            default_height=float(self.cfg.rewards.default_body_height),
-            min_height=float(self.cfg.commands.min_height),
-            max_abs_yaw=float(self.cfg.commands.max_abs_yaw),
-            max_abs_roll=float(self.cfg.commands.max_abs_roll),
-            max_abs_pitch=float(self.cfg.commands.max_abs_pitch),
-        )
-        return neutral_command_weight(
-            normalized, float(self.cfg.rewards.neutral_command_sigma)
-        )
+    def _reward_torque_limits(self):
+        """惩罚达到 99% 力矩上限的饱和关节。"""
+        saturated = torch.abs(self.torques) >= 0.99 * self.torque_limits
+        return torch.sum(saturated.float(), dim=1)
 
     def _reward_severe_wheel_park(self):
+        """惩罚轮关节严重偏离 episode 初始驻车角。"""
         wheel_error = torch.abs(
             self.wheel_park_targets - self.dof_pos[:, self.wheel_indices]
         )
@@ -953,17 +947,26 @@ class ZgwtDance(Zgwt):
         ).float()
 
     def _reward_severe_support_loss(self):
-        support_xy = torch.mean(self.feet_pos[:, :, :2], dim=1)
-        drift = torch.norm(support_xy - self.episode_start_support_xy, dim=1)
+        """惩罚支撑中心发生不可接受的大幅漂移。"""
         return (
-            drift > float(self.cfg.rewards.severe_support_loss_distance)
+            self._support_center_drift()
+            > float(self.cfg.rewards.severe_support_loss_distance)
         ).float()
 
-    def _reward_torque_limits(self):
-        """Penalize saturation; post-clip excess is otherwise identically zero."""
-        return torch.sum(
-            (
-                torch.abs(self.torques) >= 0.99 * self.torque_limits
-            ).float(),
-            dim=1,
-        )
+    def _reward_base_height_too_low(self):
+        """惩罚低于 hard threshold 的严重塌陷。"""
+        return (
+            self._current_base_height()
+            < float(self.cfg.rewards.hard_min_height)
+        ).float()
+
+    def _reward_excessive_tilt(self):
+        """惩罚超过 hard threshold 的严重倾斜。"""
+        return (
+            self.projected_gravity[:, 2]
+            > -math.cos(float(self.cfg.rewards.hard_tilt))
+        ).float()
+
+    def _reward_termination(self):
+        """只惩罚真实失败，不惩罚正常 episode 超时。"""
+        return (self.reset_buf & ~self.time_out_buf).float()

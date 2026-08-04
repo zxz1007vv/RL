@@ -103,22 +103,32 @@ def parse_sim_params(args, cfg):
 
 def get_load_path(root, load_run=-1, checkpoint=-1):
     try:
-        runs = os.listdir(root)
-        #TODO sort by date to handle change of month
-        runs.sort()
-        if 'exported' in runs: runs.remove('exported')
-        last_run = os.path.join(root, runs[-1])
-    except:
-        raise ValueError("No runs in this directory: " + root)
+        runs = [
+            entry
+            for entry in os.scandir(root)
+            if entry.is_dir() and entry.name != "exported"
+        ]
+        # 目录名按英文月份排序跨月会出错；以目录最后修改时间选择真正
+        # 最新的 run。保存 checkpoint 时目录 mtime 会同步更新。
+        last_run = max(runs, key=lambda entry: entry.stat().st_mtime).path
+    except (FileNotFoundError, ValueError, OSError) as error:
+        raise ValueError("No runs in this directory: " + root) from error
     if load_run==-1:
         load_run = last_run
     else:
         load_run = os.path.join(root, load_run)
 
     if checkpoint==-1:
-        models = [file for file in os.listdir(load_run) if 'model' in file]
-        models.sort(key=lambda m: '{0:0>15}'.format(m))
-        model = models[-1]
+        models = []
+        for file in os.listdir(load_run):
+            if not (file.startswith("model_") and file.endswith(".pt")):
+                continue
+            iteration_text = file[len("model_") : -len(".pt")]
+            if iteration_text.isdigit():
+                models.append((int(iteration_text), file))
+        if not models:
+            raise ValueError("No checkpoints in this run: " + load_run)
+        model = max(models, key=lambda item: item[0])[1]
     else:
         model = "model_{}.pt".format(checkpoint) 
 

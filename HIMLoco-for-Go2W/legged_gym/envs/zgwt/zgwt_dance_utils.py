@@ -111,3 +111,57 @@ def floored_soft_multiplier(soft_penalty, sigma, floor):
         raise ValueError("floor must be in [0, 1]")
     exponent = torch.clamp(soft_penalty / sigma, min=-20.0, max=0.0)
     return floor + (1.0 - floor) * torch.exp(exponent)
+
+
+def leg_extension_from_knee(knee_angle, thigh_length, shank_length):
+    """根据膝关节夹角计算髋到轮心的等效直线伸展量。"""
+    if thigh_length <= 0.0 or shank_length <= 0.0:
+        raise ValueError("腿段长度必须为正数")
+    extension_sq = (
+        thigh_length * thigh_length
+        + shank_length * shank_length
+        + 2.0 * thigh_length * shank_length * torch.cos(knee_angle)
+    )
+    return torch.sqrt(torch.clamp(extension_sq, min=1.0e-12))
+
+
+def height_tracking_score(
+    current_height,
+    target_height,
+    symmetric_sigma,
+    deficit_deadzone,
+    deficit_sigma,
+    deficit_weight,
+):
+    """组合对称高度误差与超过死区后的单侧下沉代价。"""
+    if symmetric_sigma <= 0.0 or deficit_sigma <= 0.0:
+        raise ValueError("高度 reward 的 sigma 必须为正数")
+    if deficit_deadzone < 0.0 or deficit_weight < 0.0:
+        raise ValueError("高度下沉死区和权重不能为负数")
+    error = current_height - target_height
+    deficit = torch.relu(-error - deficit_deadzone)
+    cost = torch.square(error) / symmetric_sigma
+    cost += deficit_weight * torch.square(deficit) / deficit_sigma
+    return torch.exp(-cost)
+
+
+def stance_coordination_score(
+    leg_extension,
+    expected_differential,
+    deadzone,
+    sigma,
+):
+    """奖励扣除命令所需差分后仍保持一致的四腿伸展量。"""
+    if leg_extension.ndim != 2 or leg_extension.shape[1] != 4:
+        raise ValueError("leg_extension 必须为 [num_envs, 4]")
+    if expected_differential.shape != leg_extension.shape:
+        raise ValueError("expected_differential 必须与 leg_extension 同形")
+    if sigma <= 0.0:
+        raise ValueError("协调 reward 的 sigma 必须为正数")
+    if torch.any(deadzone < 0.0):
+        raise ValueError("协调死区不能为负数")
+    common_mode = torch.mean(leg_extension, dim=1, keepdim=True)
+    residual = leg_extension - common_mode - expected_differential
+    excess = torch.relu(torch.abs(residual) - deadzone)
+    cost = torch.mean(torch.square(excess), dim=1)
+    return torch.exp(-cost / sigma), residual

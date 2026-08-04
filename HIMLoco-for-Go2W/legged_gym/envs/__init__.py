@@ -39,8 +39,8 @@ from .zgwt.zgwt_dance_robot import ZgwtDance
 from legged_gym.envs.zgwt_arm import (
     ZGWTDanceArmCfg,
     ZGWTDanceArmCfgPPO,
-    ZGWTDanceArmStaticCfg,
-    ZGWTDanceArmStaticCfgPPO,
+    ZGWTDanceArmPoseLibraryCfg,
+    ZGWTDanceArmPoseLibraryCfgPPO,
     ZgwtDanceArm,
 )
 
@@ -60,8 +60,8 @@ task_registry.register(
     ZGWTDanceArmCfgPPO(),
 )
 task_registry.register(
-    "zgwt_dance_arm_static",
+    "zgwt_dance_arm_pose_library",
     ZgwtDanceArm,
-    ZGWTDanceArmStaticCfg(),
-    ZGWTDanceArmStaticCfgPPO(),
+    ZGWTDanceArmPoseLibraryCfg(),
+    ZGWTDanceArmPoseLibraryCfgPPO(),
 )

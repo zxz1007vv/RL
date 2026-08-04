@@ -18,9 +18,9 @@ python tools/zgwsarm/generate_pose_candidates.py --count 500
 ### `validate_static_poses.py`
 
 在固定基座 PhysX 中对全部候选姿态执行 2 秒静态保持，检查碰撞力、关节保持
-误差和力矩占比，并生成 ArmStandV2 使用的
+误差和力矩占比，并生成机械臂姿态库适应训练使用的
 `arm_safe_static_poses.csv`。
-验证控制器与 ArmStandV2 一致，使用惯量归一化计算力矩；控制律发生变化后
+验证控制器与训练环境一致，使用惯量归一化计算力矩；控制律发生变化后
 必须重新生成验证结果。
 
 ```bash
@@ -31,13 +31,13 @@ python tools/zgwsarm/validate_static_poses.py \
 
 ### `validate_dynamic_control.py`
 
-创建一个完整的 `zgwt_dance_arm_static` 环境，但不加载 PPO runner。它让机械臂
+创建一个完整的 `zgwt_dance_arm_pose_library` 环境，但不加载 PPO runner。它让机械臂
 沿一条通过 Jacobian 检查的安全关节路径运动，验证速度、加速度、力矩、力矩
 变化率、最终跟踪误差和 reset 数量。
 
 ```bash
 python tools/zgwsarm/validate_dynamic_control.py \
-  --task zgwt_dance_arm_static \
+  --task zgwt_dance_arm_pose_library \
   --headless \
   --num_envs 1 \
   --duration 10.0

@@ -92,15 +92,15 @@ python legged_gym/scripts/play.py --task zgwt_dance_arm --checkpoint <ckpt>
 继续使用 `policy_<run_name>_ckpt<实际 checkpoint>.pt`，同时更新部署快捷文件
 `policy.pt`。
 
-## ArmStandV2-Sim
+## 机械臂姿态库适应阶段
 
 任务名：
 
 ```bash
-python legged_gym/scripts/train.py --task zgwt_dance_arm_static
+python legged_gym/scripts/train.py --task zgwt_dance_arm_pose_library
 ```
 
-ArmStandV2-Sim 使用同一个唯一机械臂控制器，不再切换控制律。开始该阶段前，
+姿态库适应阶段使用同一个唯一机械臂控制器，不再切换控制律。开始该阶段前，
 应把它的父 checkpoint 更新为新完成的 `armstand_aligned_v1`。
 
 该任务只读取以下条件全部满足的 CSV 行：
@@ -145,9 +145,9 @@ python tools/zgwsarm/validate_static_poses.py \
 当前仓库已用唯一控制器重新验证 500 个候选，2.0 秒 PhysX 静态保持有
 455 个通过，`hardware_verified` 仍全部为 false。
 
-### 3. 训练静态姿态随机化
+### 3. 训练机械臂姿态库适应
 
-完成新站立模型后，把 `zgwt_dance_arm_static` 的父 checkpoint 指向该模型。
+完成新站立模型后，把 `zgwt_dance_arm_pose_library` 的父 checkpoint 指向该模型。
 每个环境在 reset 时抽取一个安全姿态，并在整个 episode 内保持不变；机械臂
 姿态不会加入策略观测。
 
@@ -157,7 +157,7 @@ python tools/zgwsarm/validate_static_poses.py \
 
 ```bash
 python tools/zgwsarm/validate_dynamic_control.py \
-  --task zgwt_dance_arm_static \
+  --task zgwt_dance_arm_pose_library \
   --headless \
   --num_envs 1 \
   --duration 10.0
@@ -203,7 +203,7 @@ reset 次数：         0
 `simulation_home` 的 J2 和 J3 位于 URDF 硬限位，只用于第一阶段站立对齐
 当前 C++ 仿真，不能进入普通安全姿态库。
 
-真实遥操作轨迹不是 ArmStandV1/V2 的前置条件。Isaac 端接收已经通过检查的
+真实遥操作轨迹不是固定 Home 站立/姿态库适应阶段的前置条件。Isaac 端接收已经通过检查的
 六关节目标，不替代 C++ 的笛卡尔 IK、奇异规避和遥操作映射。将来训练动态
 机械臂时，姿态端点和两点之间的完整轨迹都必须逐点检查限位、碰撞与
 Jacobian；仅检查两个端点不够。真机编码器零位、方向、控制增益和工具质量

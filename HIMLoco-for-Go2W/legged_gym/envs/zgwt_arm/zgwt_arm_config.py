@@ -44,79 +44,30 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
             body_pitch = [0.0, 0.0]
             body_height = [0.54, 0.54]
 
-    # 带臂任务的 reward 在这里完整定义，不继承 ZGWTDanceCfg.rewards；
-    # 本阶段针对带臂承载下的压弯和外八独立调参。
-    class rewards:
+    # 完整机械臂沿用相同四类语义，只提高带臂阶段的姿态、高度和支撑权重。
+    class rewards(ZGWTDanceCfg.rewards):
         class scales:
-            # 姿态命令跟踪。roll/pitch 共用目标重力方向误差。
-            tracking_body_orientation = 13.0
+            tracking_body_roll = 6.5
+            tracking_body_pitch = 6.5
             tracking_body_yaw = 6.0
             tracking_body_height = 9.0
 
-            # 静止保持。先约束支撑中心，再约束各轮足位置。
-            tracking_lin_vx = 3.0
-            tracking_lin_vy = 3.0
-            tracking_support_position = 4.0
-            tracking_feet_position = 2.0
-            tracking_max_foot_position = 1.5
+            tracking_lin_vx = 4.0
+            tracking_lin_vy = 4.0
+            body_stability = 3.0
+            stance_coordination = 4.0
+            support_stability = 4.0
 
-            # 稳定、平滑和安全项。scales 是唯一 reward 权重来源。
-            yaw_rate = -0.05
-            collision = -1.0
-            feet_contact = -1.0
-            feet_stumble = -0.1
-            feet_vertical_motion = -0.1
             action_rate = -0.01
-            action_smoothness = -0.005
-            # 允许策略为承载机械臂输出必要力矩，同时加强实际腿姿约束。
-            torques = -5.0e-6
-            neutral_joint_pose = -5.0
-            neutral_abduction_pose = -4.0
+
+            collision = -1.0
             dof_pos_limits = -2.0
-            torque_limits = -0.1
+            torque_limits = -0.05
             severe_wheel_park = -4.0
             severe_support_loss = -4.0
-
-        only_positive_rewards = False
-
-        # 最终任务 reward 和软约束乘子。
-        task_reward_scale = 28.0
-        hold_gate_sigma = 0.50
-        auxiliary_reward_sigma = 0.10
-        auxiliary_reward_floor = 0.30
-
-        # 各跟踪误差的指数尺度。
-        orientation_tracking_sigma = 0.012
-        yaw_tracking_sigma = 0.0025
-        height_tracking_sigma = 0.0016
-        tracking_sigma = 0.25
-
-        # 中立姿态诊断及 neutral reward 门控。
-        active_orientation_threshold = 0.03
-        active_yaw_threshold = 0.02
-        active_height_threshold = 0.02
-        neutral_command_sigma = 0.20
-
-        # 轮足/支撑位置保持尺度和接触求解容差。
-        feet_position_tracking_sigma = 0.003
-        support_position_tracking_sigma = 0.001
-        max_foot_position_tracking_sigma = 0.001
-        feet_anchor_deadzone = 0.015
-        support_anchor_deadzone = 0.010
-
-        # 通用关节、力矩和接触安全阈值。
-        soft_dof_pos_limit = 1.0
-        soft_dof_vel_limit = 1.0
-        soft_torque_limit = 1.0
-        max_contact_force = 100.0
-
-        # 默认姿态及 episode 终止/严重失稳阈值。
-        base_height_target = 0.54
-        default_body_height = 0.54
-        termination_tilt = 0.55
-        termination_min_height = 0.32
-        severe_wheel_park_error = 0.35
-        severe_support_loss_distance = 0.20
+            base_height_too_low = -4.0
+            excessive_tilt = -4.0
+            termination = -10.0
 
     class arm:
         joint_names = [f"ROBOT_ARM_JOINT{i}" for i in range(1, 7)]
@@ -124,7 +75,7 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
         position_lower = [-2.618, 0.0, -2.9671, -1.57, -1.57, -6.28]
         position_upper = [2.618, 3.14, 0.0, 1.57, 1.57, 6.28]
 
-        # "home" 为 ArmStandV1；"library" 为 ArmStandV2-Sim。
+        # "home" 为固定 Home 站立阶段；"library" 为机械臂姿态库适应阶段。
         pose_mode = "home"
         pose_library_file = (
             "{LEGGED_GYM_ROOT_DIR}/config/robots/zgwsarm/"
@@ -162,6 +113,8 @@ class ZGWTDanceArmCfg(ZGWTDanceCfg):
         randomize_payload_mass = True
         payload_mass_range = [-0.5, 1.5]
         randomize_com_displacement = True
+        # 完整机械臂已经显式建模，不再把额外 payload 与 home 姿态等效 COM 绑定。
+        correlate_payload_and_com = False
         com_displacement_range = [-0.015, 0.015]
         com_displacement_is_offset = True
         randomize_link_mass = True
@@ -205,17 +158,17 @@ class ZGWTDanceArmCfgPPO(ZGWTDanceCfgPPO):
         checkpoint = 20000
 
 
-class ZGWTDanceArmStaticCfg(ZGWTDanceArmCfg):
-    """ArmStand 静态姿态库阶段：每个 episode 固定一个安全姿态。"""
+class ZGWTDanceArmPoseLibraryCfg(ZGWTDanceArmCfg):
+    """机械臂姿态库适应阶段：每个 episode 固定抽取一个安全姿态。"""
 
     class arm(ZGWTDanceArmCfg.arm):
         pose_mode = "library"
 
 
-class ZGWTDanceArmStaticCfgPPO(ZGWTDanceArmCfgPPO):
+class ZGWTDanceArmPoseLibraryCfgPPO(ZGWTDanceArmCfgPPO):
     class runner(ZGWTDanceArmCfgPPO.runner):
         experiment_name = "ZGWT_DANCE_ARM"
-        run_name = "armstandv2_aligned"
+        run_name = "armstand_pose_library_aligned_v1"
         # 后续开始姿态库阶段时，应改为加载新完成的 armstand_aligned_v1。
         load_experiment_name = "ZGWT_DANCE_ARM"
         load_run = "Jul31_18-46-40_armstandv1"

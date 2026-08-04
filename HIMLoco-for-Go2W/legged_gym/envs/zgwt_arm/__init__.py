@@ -3,15 +3,15 @@
 from .zgwt_arm_config import (
     ZGWTDanceArmCfg,
     ZGWTDanceArmCfgPPO,
-    ZGWTDanceArmStaticCfg,
-    ZGWTDanceArmStaticCfgPPO,
+    ZGWTDanceArmPoseLibraryCfg,
+    ZGWTDanceArmPoseLibraryCfgPPO,
 )
 from .zgwt_arm_robot import ZgwtDanceArm
 
 __all__ = [
     "ZGWTDanceArmCfg",
     "ZGWTDanceArmCfgPPO",
-    "ZGWTDanceArmStaticCfg",
-    "ZGWTDanceArmStaticCfgPPO",
+    "ZGWTDanceArmPoseLibraryCfg",
+    "ZGWTDanceArmPoseLibraryCfgPPO",
     "ZgwtDanceArm",
 ]

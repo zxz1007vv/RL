@@ -182,7 +182,7 @@ def generate(args):
     print(f"已生成 {len(accepted)} 个候选: {output}")
     print(f"采样尝试次数: {attempts}")
     print(f"类别统计: {categories}")
-    print("注意：候选尚未做 PhysX 碰撞/保持验证，不能直接用于 ArmStandV2。")
+    print("注意：候选尚未做 PhysX 碰撞/保持验证，不能直接用于姿态库适应训练。")
 
 
 def parse_args():

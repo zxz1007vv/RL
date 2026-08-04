@@ -19,10 +19,6 @@ from ..zgwt.zgwt_dance_robot import ZgwtDance
 class ZgwtDanceArm(ZgwtDance):
     """腿部策略与六轴传统控制器解耦的 ZGWT 带臂舞蹈环境。"""
 
-    SOFT_REWARD_NAMES = ZgwtDance.SOFT_REWARD_NAMES | {
-        "neutral_abduction_pose"
-    }
-
     cfg: ZGWTDanceArmCfg
 
     def _create_envs(self):

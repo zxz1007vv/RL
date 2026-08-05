@@ -12,7 +12,6 @@ from .zgwt_dance_utils import (
     height_tracking_score,
     leg_extension_from_knee,
     low_pass_alpha,
-    normalize_dance_commands,
     select_wheel_factors,
     stance_coordination_score,
 )
@@ -35,6 +34,12 @@ class ZgwtDance(Zgwt):
         super()._init_buffers()
         self.payload = created_payload
         self.com_displacement = created_com_displacement
+        self.commands_scale = torch.tensor(
+            self.cfg.commands.command_scales,
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
+        )
         if not hasattr(self, "equivalent_payload_com_samples"):
             self.equivalent_payload_com_samples = torch.zeros(
                 self.num_envs, 3, dtype=torch.float, device=self.device
@@ -89,6 +94,65 @@ class ZgwtDance(Zgwt):
         self.command_mode_probabilities = self._normalized_probabilities(
             self.cfg.commands.mode_probabilities, "manual"
         )
+        required_range_names = {"body_yaw", "body_roll", "body_pitch"}
+        range_start = self.cfg.commands.pose_range_start
+        range_final = self.cfg.commands.pose_range_final
+        if set(range_start) != required_range_names:
+            raise ValueError("pose_range_start 必须只定义 yaw、roll、pitch")
+        if set(range_final) != required_range_names:
+            raise ValueError("pose_range_final 必须只定义 yaw、roll、pitch")
+        for name in required_range_names:
+            start_max = float(range_start[name])
+            final_max = float(range_final[name])
+            if start_max <= 0.0 or final_max < start_max:
+                raise ValueError(f"{name} 的课程起止范围无效")
+        num_levels = int(self.cfg.commands.pose_range_num_levels)
+        if num_levels < 2:
+            raise ValueError("姿态范围课程至少需要两级")
+        start_level = int(
+            self.cfg.commands.pose_range_curriculum_start_level
+        )
+        if start_level < 0 or start_level >= num_levels:
+            raise ValueError("姿态范围课程起始等级必须位于有效范围内")
+        if float(self.cfg.commands.pose_range_min_level_time_s) < 0.0:
+            raise ValueError("每级最短训练时间不能为负数")
+        if int(self.cfg.commands.pose_curriculum_min_episodes) <= 0:
+            raise ValueError("课程统计窗口的 episode 数必须为正数")
+        if int(
+            self.cfg.commands.pose_curriculum_required_success_windows
+        ) <= 0:
+            raise ValueError("课程连续成功窗口数必须为正数")
+        tracking_threshold = float(
+            self.cfg.commands.pose_curriculum_tracking_threshold
+        )
+        failure_threshold = float(
+            self.cfg.commands.pose_curriculum_max_failure_rate
+        )
+        anchor_threshold = float(
+            self.cfg.commands.pose_curriculum_max_anchor_cost
+        )
+        contact_threshold = float(
+            self.cfg.commands.pose_curriculum_max_contact_cost
+        )
+        if not 0.0 <= tracking_threshold <= 1.0:
+            raise ValueError("课程 tracking 阈值必须位于 [0, 1]")
+        if not 0.0 <= failure_threshold <= 1.0:
+            raise ValueError("课程失败率阈值必须位于 [0, 1]")
+        if anchor_threshold < 0.0 or contact_threshold < 0.0:
+            raise ValueError("课程稳定性代价阈值不能为负数")
+
+        self.pose_range_curriculum_level = start_level
+        self.pose_range_level_start_step = int(self.common_step_counter)
+        self.pose_curriculum_episode_count = 0
+        self.pose_curriculum_tracking_sum = 0.0
+        self.pose_curriculum_failure_count = 0
+        self.pose_curriculum_anchor_cost_sum = 0.0
+        self.pose_curriculum_contact_cost_sum = 0.0
+        self.pose_curriculum_success_windows = 0
+        self.last_pose_curriculum_tracking_quality = 0.0
+        self.last_pose_curriculum_failure_rate = 1.0
+        self.last_pose_curriculum_anchor_cost = 0.0
+        self.last_pose_curriculum_contact_cost = 0.0
 
         # 协调性按 FBL、FAR、RBL、RAR 的膝关节计算，轮关节天然被排除。
         leg_order = ("FBL", "FAR", "RBL", "RAR")
@@ -278,7 +342,10 @@ class ZgwtDance(Zgwt):
             leg_extension, dim=1
         ).values
         body_stability_score = self._reward_body_stability()[env_ids]
-        support_stability_score = self._reward_support_stability()[env_ids]
+        feet_anchor_cost = self._reward_feet_anchor()[env_ids]
+        feet_contact_cost = self._reward_feet_contact()[env_ids]
+        self._update_pose_range_curriculum(env_ids)
+        curriculum_ranges, _ = self._current_command_sampling_config()
 
         roll_active = (
             torch.abs(self.pose_command_targets[env_ids, 0])
@@ -325,6 +392,13 @@ class ZgwtDance(Zgwt):
         feet_xy_drift = torch.mean(individual_wheel_drift)
         max_individual_wheel_drift = torch.mean(
             torch.max(individual_wheel_drift, dim=1).values
+        )
+        severe_individual_foot_drift_rate = torch.mean(
+            torch.any(
+                individual_wheel_drift
+                > float(self.cfg.rewards.severe_individual_foot_drift),
+                dim=1,
+            ).float()
         )
         p95_individual_wheel_drift = torch.quantile(
             individual_wheel_drift.reshape(-1), 0.95
@@ -430,6 +504,7 @@ class ZgwtDance(Zgwt):
         episode["mean_abs_yaw_error_inactive"] = self._masked_mean(
             yaw_abs_error, 1.0 - yaw_active
         )
+        episode["mean_abs_yaw_tracking_error"] = torch.mean(yaw_abs_error)
         episode["mean_abs_height_error_inactive"] = self._masked_mean(
             height_abs_error, 1.0 - height_active
         )
@@ -441,6 +516,9 @@ class ZgwtDance(Zgwt):
         episode["mean_feet_xy_drift"] = feet_xy_drift
         episode["max_individual_wheel_drift"] = (
             max_individual_wheel_drift
+        )
+        episode["severe_individual_foot_drift_rate"] = (
+            severe_individual_foot_drift_rate
         )
         episode["p95_individual_wheel_drift"] = (
             p95_individual_wheel_drift
@@ -462,8 +540,56 @@ class ZgwtDance(Zgwt):
         episode["mean_body_stability_score"] = torch.mean(
             body_stability_score
         )
-        episode["mean_support_stability_score"] = torch.mean(
-            support_stability_score
+        episode["mean_feet_anchor_cost"] = torch.mean(feet_anchor_cost)
+        episode["mean_feet_contact_cost"] = torch.mean(feet_contact_cost)
+        episode["command_range_curriculum_level"] = torch.tensor(
+            float(self.pose_range_curriculum_level), device=self.device
+        )
+        episode["command_range_curriculum_progress"] = torch.tensor(
+            self.pose_range_curriculum_level
+            / max(int(self.cfg.commands.pose_range_num_levels) - 1, 1),
+            device=self.device,
+        )
+        episode["command_range_level_elapsed_s"] = torch.tensor(
+            (
+                int(self.common_step_counter)
+                - self.pose_range_level_start_step
+            )
+            * self.dt,
+            device=self.device,
+        )
+        episode["command_curriculum_tracking_quality"] = torch.tensor(
+            self.last_pose_curriculum_tracking_quality, device=self.device
+        )
+        episode["command_curriculum_failure_rate"] = torch.tensor(
+            self.last_pose_curriculum_failure_rate, device=self.device
+        )
+        episode["command_curriculum_anchor_cost"] = torch.tensor(
+            self.last_pose_curriculum_anchor_cost, device=self.device
+        )
+        episode["command_curriculum_contact_cost"] = torch.tensor(
+            self.last_pose_curriculum_contact_cost, device=self.device
+        )
+        episode["command_curriculum_success_windows"] = torch.tensor(
+            float(self.pose_curriculum_success_windows), device=self.device
+        )
+        episode["command_curriculum_yaw_max"] = torch.tensor(
+            max(abs(value) for value in curriculum_ranges["body_yaw"]),
+            device=self.device,
+        )
+        episode["command_curriculum_roll_max"] = torch.tensor(
+            max(abs(value) for value in curriculum_ranges["body_roll"]),
+            device=self.device,
+        )
+        episode["command_curriculum_pitch_max"] = torch.tensor(
+            max(abs(value) for value in curriculum_ranges["body_pitch"]),
+            device=self.device,
+        )
+        episode["command_curriculum_height_min"] = torch.tensor(
+            curriculum_ranges["body_height"][0], device=self.device
+        )
+        episode["command_curriculum_height_max"] = torch.tensor(
+            curriculum_ranges["body_height"][1], device=self.device
         )
         episode["fall_rate"] = fall_rate
         episode["contact_loss_ratio"] = contact_loss_ratio
@@ -481,14 +607,175 @@ class ZgwtDance(Zgwt):
         episode["mean_payload_com_y"] = mean_payload_com[1]
         episode["mean_payload_com_z"] = mean_payload_com[2]
 
+    def _pose_range_limits_for_level(self, level):
+        """按等级线性插值得到 yaw、roll、pitch 的对称范围。"""
+        num_levels = int(self.cfg.commands.pose_range_num_levels)
+        progress = int(level) / max(num_levels - 1, 1)
+        ranges = {}
+        for name in ("body_yaw", "body_roll", "body_pitch"):
+            start_max = float(self.cfg.commands.pose_range_start[name])
+            final_max = float(self.cfg.commands.pose_range_final[name])
+            current_max = start_max + progress * (final_max - start_max)
+            ranges[name] = [-current_max, current_max]
+        # 高度不参与自动课程，始终由 ranges.body_height 手工控制。
+        ranges["body_height"] = self.command_ranges["body_height"]
+        return ranges
+
+    def _advance_pose_range_curriculum(self):
+        """只提升姿态角命令范围；命令模式概率始终保持人工配置。"""
+        if not bool(self.cfg.commands.pose_range_curriculum_enabled):
+            return False
+        final_level = int(self.cfg.commands.pose_range_num_levels) - 1
+        if self.pose_range_curriculum_level >= final_level:
+            return False
+        self.pose_range_curriculum_level += 1
+        self.pose_range_level_start_step = int(self.common_step_counter)
+        return True
+
+    def _update_pose_range_curriculum(self, env_ids):
+        """满足最短训练量和连续稳定窗口后，闭环扩大姿态角范围。"""
+        if not bool(self.cfg.commands.pose_range_curriculum_enabled):
+            return
+        valid_env_ids = env_ids[self.episode_length_buf[env_ids] > 0]
+        if len(valid_env_ids) == 0:
+            return
+
+        episode_length = self.episode_length_buf[valid_env_ids].float()
+        tracking_quality = torch.ones_like(episode_length)
+        for reward_name in (
+            "tracking_body_roll",
+            "tracking_body_pitch",
+            "tracking_body_yaw",
+            "tracking_body_height",
+        ):
+            if reward_name not in self.episode_sums:
+                raise RuntimeError(
+                    f"姿态课程缺少必要 reward：{reward_name}"
+                )
+            reward_scale = float(self.reward_scales[reward_name])
+            if reward_scale <= 0.0:
+                raise RuntimeError(
+                    f"姿态课程要求 {reward_name} 使用正权重"
+                )
+            mean_raw_score = self.episode_sums[reward_name][
+                valid_env_ids
+            ] / (episode_length * reward_scale)
+            tracking_quality = torch.minimum(
+                tracking_quality,
+                torch.clamp(mean_raw_score, min=0.0, max=1.0),
+            )
+
+        penalty_costs = {}
+        for reward_name in ("feet_anchor", "feet_contact"):
+            if reward_name not in self.episode_sums:
+                raise RuntimeError(
+                    f"姿态范围课程缺少必要 reward：{reward_name}"
+                )
+            reward_scale = float(self.reward_scales[reward_name])
+            if reward_scale >= 0.0:
+                raise RuntimeError(
+                    f"姿态范围课程要求 {reward_name} 使用负权重"
+                )
+            penalty_costs[reward_name] = torch.clamp(
+                self.episode_sums[reward_name][valid_env_ids]
+                / (episode_length * reward_scale),
+                min=0.0,
+            )
+
+        self.pose_curriculum_episode_count += len(valid_env_ids)
+        self.pose_curriculum_tracking_sum += float(
+            torch.sum(tracking_quality).item()
+        )
+        self.pose_curriculum_failure_count += int(
+            torch.sum((~self.time_out_buf[valid_env_ids]).float()).item()
+        )
+        self.pose_curriculum_anchor_cost_sum += float(
+            torch.sum(penalty_costs["feet_anchor"]).item()
+        )
+        self.pose_curriculum_contact_cost_sum += float(
+            torch.sum(penalty_costs["feet_contact"]).item()
+        )
+        minimum_episodes = int(
+            self.cfg.commands.pose_curriculum_min_episodes
+        )
+        if self.pose_curriculum_episode_count < minimum_episodes:
+            return
+
+        episode_count = max(self.pose_curriculum_episode_count, 1)
+        tracking_mean = self.pose_curriculum_tracking_sum / episode_count
+        failure_rate = self.pose_curriculum_failure_count / episode_count
+        anchor_cost_mean = (
+            self.pose_curriculum_anchor_cost_sum / episode_count
+        )
+        contact_cost_mean = (
+            self.pose_curriculum_contact_cost_sum / episode_count
+        )
+        self.last_pose_curriculum_tracking_quality = tracking_mean
+        self.last_pose_curriculum_failure_rate = failure_rate
+        self.last_pose_curriculum_anchor_cost = anchor_cost_mean
+        self.last_pose_curriculum_contact_cost = contact_cost_mean
+        level_elapsed_s = (
+            int(self.common_step_counter) - self.pose_range_level_start_step
+        ) * self.dt
+        passed = (
+            level_elapsed_s
+            >= float(self.cfg.commands.pose_range_min_level_time_s)
+            and tracking_mean >= float(
+                self.cfg.commands.pose_curriculum_tracking_threshold
+            )
+            and failure_rate <= float(
+                self.cfg.commands.pose_curriculum_max_failure_rate
+            )
+            and anchor_cost_mean <= float(
+                self.cfg.commands.pose_curriculum_max_anchor_cost
+            )
+            and contact_cost_mean <= float(
+                self.cfg.commands.pose_curriculum_max_contact_cost
+            )
+        )
+        if passed:
+            self.pose_curriculum_success_windows += 1
+        else:
+            self.pose_curriculum_success_windows = 0
+
+        self.pose_curriculum_episode_count = 0
+        self.pose_curriculum_tracking_sum = 0.0
+        self.pose_curriculum_failure_count = 0
+        self.pose_curriculum_anchor_cost_sum = 0.0
+        self.pose_curriculum_contact_cost_sum = 0.0
+        required_windows = int(
+            self.cfg.commands.pose_curriculum_required_success_windows
+        )
+        if self.pose_curriculum_success_windows >= required_windows:
+            if self._advance_pose_range_curriculum():
+                self.pose_curriculum_success_windows = 0
+
+    def _current_command_sampling_config(self):
+        """范围可自动升级，模式概率始终使用人工配置。"""
+        if bool(self.cfg.commands.pose_range_curriculum_enabled):
+            ranges = self._pose_range_limits_for_level(
+                self.pose_range_curriculum_level
+            )
+        else:
+            ranges = {
+                "body_yaw": self.command_ranges["body_yaw"],
+                "body_roll": self.command_ranges["body_roll"],
+                "body_pitch": self.command_ranges["body_pitch"],
+                "body_height": self.command_ranges["body_height"],
+            }
+        return ranges, self.command_mode_probabilities
+
     def _resample_commands(self, env_ids):
         if len(env_ids) == 0:
             return
 
-        yaw_range = self.command_ranges["body_yaw"]
-        roll_range = self.command_ranges["body_roll"]
-        pitch_range = self.command_ranges["body_pitch"]
-        height_range = self.command_ranges["body_height"]
+        sampling_ranges, mode_probabilities = (
+            self._current_command_sampling_config()
+        )
+        yaw_range = sampling_ranges["body_yaw"]
+        roll_range = sampling_ranges["body_roll"]
+        pitch_range = sampling_ranges["body_pitch"]
+        height_range = sampling_ranges["body_height"]
         count = len(env_ids)
 
         sampled_yaw = torch_rand_float(
@@ -504,10 +791,9 @@ class ZgwtDance(Zgwt):
             height_range[0], height_range[1], (count, 1), device=self.device
         ).squeeze(1)
 
-        # Mix isolated and combined commands so each degree of freedom is learned
-        # before the policy sees the hardest corner combinations.
+        # 模式仅按人工填写的 mode_probabilities 采样，不在代码中自动增减。
         mode = torch.multinomial(
-            self.command_mode_probabilities, count, replacement=True
+            mode_probabilities, count, replacement=True
         )
         targets = torch.zeros(count, 3, dtype=torch.float, device=self.device)
         targets[:, 2] = self.cfg.rewards.default_body_height
@@ -632,20 +918,12 @@ class ZgwtDance(Zgwt):
         # relative yaw error keeps the actor input Markovian without adding a
         # new observation dimension.
         observed_commands[:, 2] = self._body_yaw_error()
-        observed_commands = normalize_dance_commands(
-            observed_commands,
-            default_height=float(self.cfg.rewards.default_body_height),
-            min_height=float(self.cfg.commands.min_height),
-            max_abs_yaw=float(self.cfg.commands.max_abs_yaw),
-            max_abs_roll=float(self.cfg.commands.max_abs_roll),
-            max_abs_pitch=float(self.cfg.commands.max_abs_pitch),
-        )
 
         actor_obs = torch.cat(
             (
                 self.base_ang_vel * self.obs_scales.ang_vel,
                 self.projected_gravity,
-                observed_commands,
+                observed_commands * self.commands_scale,
                 dof_err * self.obs_scales.dof_pos,
                 policy_dof_vel * self.obs_scales.dof_vel,
                 self.actions,
@@ -864,17 +1142,26 @@ class ZgwtDance(Zgwt):
         score, _ = self._stance_coordination_score_and_residual()
         return score
 
-    def _reward_support_stability(self):
-        """约束每个轮足的世界坐标驻足，并保持四轮有效接触。"""
-        foot_excess = self._feet_anchor_excess()
-        mean_foot_cost = torch.mean(torch.square(foot_excess), dim=1) / float(
-            self.cfg.rewards.feet_position_tracking_sigma
+    def _reward_feet_anchor(self):
+        """用 Smooth-L1 惩罚四轮平均漂移和最大单轮漂移。"""
+        excess = self._feet_anchor_excess()
+        normalized = excess / float(
+            self.cfg.rewards.feet_anchor_penalty_scale
         )
-        max_foot_cost = torch.square(
-            torch.max(foot_excess, dim=1).values
-        ) / float(
-            self.cfg.rewards.max_foot_position_tracking_sigma
+        smooth_l1 = torch.where(
+            normalized < 1.0,
+            0.5 * torch.square(normalized),
+            normalized - 0.5,
         )
+        mean_cost = torch.mean(smooth_l1, dim=1)
+        max_cost = torch.max(smooth_l1, dim=1).values
+        return (
+            float(self.cfg.rewards.feet_anchor_mean_weight) * mean_cost
+            + float(self.cfg.rewards.feet_anchor_max_weight) * max_cost
+        )
+
+    def _reward_feet_contact(self):
+        """惩罚每个轮足竖直接触力低于有效接触阈值。"""
         min_force = float(self.cfg.rewards.support_min_contact_force)
         contact_deficit = torch.clamp(
             (min_force - self.contact_forces[:, self.feet_indices, 2])
@@ -882,10 +1169,7 @@ class ZgwtDance(Zgwt):
             min=0.0,
             max=1.0,
         )
-        contact_cost = torch.mean(torch.square(contact_deficit), dim=1) / float(
-            self.cfg.rewards.support_contact_sigma
-        )
-        return torch.exp(-(mean_foot_cost + max_foot_cost + contact_cost))
+        return torch.mean(torch.square(contact_deficit), dim=1)
 
     def _reward_feet_outward(self):
         """同时惩罚轮足向外滑动和 ABAD 关节向外展开。"""
@@ -1032,11 +1316,21 @@ class ZgwtDance(Zgwt):
         ).float()
 
     def _reward_severe_support_loss(self):
-        """惩罚支撑中心发生不可接受的大幅漂移。"""
-        return (
+        """惩罚支撑中心或任意单轮发生不可接受的大幅漂移。"""
+        support_center_lost = (
             self._support_center_drift()
             > float(self.cfg.rewards.severe_support_loss_distance)
-        ).float()
+        )
+        individual_foot_drift = torch.norm(
+            self.feet_pos[:, :, :2] - self.episode_start_feet_xy,
+            dim=2,
+        )
+        individual_foot_lost = torch.any(
+            individual_foot_drift
+            > float(self.cfg.rewards.severe_individual_foot_drift),
+            dim=1,
+        )
+        return (support_center_lost | individual_foot_lost).float()
 
     def _reward_base_height_too_low(self):
         """惩罚低于 hard threshold 的严重塌陷。"""

@@ -9,7 +9,7 @@
 - 原 `tracking_body_orientation` 在 `_tracking_cost()` 中把 projected gravity 的 x/y 误差求和，roll 与 pitch 无法分开诊断。再与 yaw、height 做加权平均时，一个轴的严重错误会被其他三个较好轴稀释。
 - `tracking_lin_vx`、`tracking_lin_vy` 现在独立启用并跟踪固定零命令，便于直接提高平面防漂移权重和分轴诊断；`body_stability` 不再重复计算 xy 线速度，只负责 z 线速度与角速度。
 - 原支撑中心约束无法发现四脚对称外八或单轮滑动。当前把四个轮足的 episode 初始世界坐标作为 soft anchor；机身仍可围绕固定支撑完成小范围姿态和高度跟踪。
-- 原 `feet_contact` 与足端稳定相关，但作为独立 hard penalty 会把接触求解器抖动直接放大。它已并入 `support_stability` 的接触缺失成本。
+- `feet_anchor` 和 `feet_contact` 现在是两个独立的连续负惩罚，分别负责世界坐标防滑和逐轮有效接触，便于单独调权与诊断。
 - 原 `neutral_joint_pose = sum(abs(q-q_default))` 无法区分四腿共模下蹲和单腿差模折叠，并会直接阻碍主动 height 命令，Stage 0 删除。
 - 原 `action_rate` 与 `action_smoothness` 分别是一阶、二阶动作差分；当前带载站立阶段同时使用会重复限制策略的快速承载反应。Stage 0 只保留 `action_rate`。
 - 原 `torques` 会鼓励策略省力。带载站立阶段的主要失败正是支撑不足，因此 Stage 0 删除；稳定后再以很小权重加入。
@@ -66,9 +66,10 @@ reward = task_tracking + stance_stability + control_quality + safety_constraints
 | Stance Stability | `feet_vertical_motion` | 合并/删除 | 机身速度与接触稳定已覆盖，Stage 0 不单列 |
 | Stance Stability | `stance_coordination` | 新增 | 区分共模压缩与差模折叠，排除 wheel joint |
 | Stance Stability | `tracking_support_position` | diagnostics/终止 | 支撑中心只用于整体漂移诊断和严重支撑丢失终止 |
-| Stance Stability | `feet_contact` | 合并 | 作为 `support_stability` 内部接触成本 |
-| Stance Stability | `tracking_feet_position` | 修改/合并 | 四轮平均世界坐标漂移并入 `support_stability` |
-| Stance Stability | `tracking_max_foot_position` | 修改/合并 | 最大单轮世界坐标漂移并入 `support_stability` |
+| Stance Stability | `feet_anchor` | 新增 | 四轮平均和最大单轮世界坐标漂移的 Smooth-L1 负惩罚 |
+| Stance Stability | `feet_contact` | 新增 | 每个轮足垂直接触力不足的独立负惩罚 |
+| Stance Stability | `support_stability` | 关闭 | scale 设为 0，旧函数删除 |
+| Stance Stability | `feet_outward` | 弱保留 | scale 降至 -1；anchor 稳定后可设为 0，仅保留 diagnostics |
 | Stance Stability | `neutral_joint_pose` | 删除 | 会惩罚协调下蹲，不能识别单腿折叠 |
 | Safety Constraints | `feet_stumble` | diagnostics/删除 | 平地 Stage 0 不需要；障碍任务再启用 |
 | Safety Constraints | `severe_support_loss` | 保留并终止 | 支撑中心漂移超过 0.20 m 时给 hard penalty 并结束 episode |
@@ -100,7 +101,10 @@ Stance Stability:
   tracking_lin_vy          +4.0
   body_stability           +3.0
   stance_coordination      +4.0
-  support_stability        +3.0
+  support_stability         0.0
+  feet_anchor              -2.0
+  feet_contact             -0.5
+  feet_outward             -1.0
 
 Control Quality:
   action_rate              -0.01
@@ -186,18 +190,24 @@ R_coord = exp(-C_coord / 0.0004)
 
 `mean(L)` 是允许的共模压缩；只有差模残差受罚。固定死区推荐 `0.012～0.025 m`。当前的命令补偿比简单 `exp(-command²)` gating 更合适，因为它不会在大姿态命令时完全关闭协调约束；额外连续放宽只用于吸收简化几何和合理偏载不对称。
 
-### 4.5 Support stability
+### 4.5 Feet anchor 与 feet contact
 
 ```text
 d_i = ||foot_xy_i-foot_xy_i_reset||
 e_i = relu(d_i - 0.010)
+n_i = e_i / 0.020
+Huber(n_i) = 0.5*n_i², n_i < 1
+           = n_i-0.5, n_i >= 1
+C_anchor = 0.35*mean(Huber(n_i)) + 0.65*max(Huber(n_i))
+
 c_i = clip((5N-Fz_i)/5N, 0, 1)
-C_support = mean(e_i²)/0.0004 + max(e_i)²/0.000225
-          + mean(c_i²)/0.25
-R_support = exp(-C_support)
+C_contact = mean(c_i²)
+
+R_anchor  = -2.0*C_anchor
+R_contact = -0.5*C_contact
 ```
 
-轮足 anchor 使用世界坐标而非机身相对坐标，因此不会把正常的机身 yaw、roll、pitch 和 height 变化当作足端误差。平均项约束四足整体滑动，最大项捕捉单轮异常，接触缺失项避免单轮长期离地。支撑中心仅保留 diagnostics 和严重支撑丢失终止。
+轮足 anchor 使用世界坐标而非机身相对坐标，因此不会把正常的机身 yaw、roll、pitch 和 height 变化当作足端误差。平均项约束四足整体滑动，权重更大的最大项捕捉单轮异常；接触项只要求每条腿达到最小有效接触力，不要求接触力相等。支撑中心继续用于 diagnostics、严重支撑丢失 hard penalty 和原有 termination；单轮超过 0.10 m 目前只触发 hard penalty，不触发 termination。
 
 ### 4.6 Action rate
 
@@ -234,7 +244,7 @@ friction_range = [0.75, 0.90]
 - `_reward_tracking_body_height()` 内部 deficit；
 - `_reward_body_stability()`；
 - `_leg_extension()`、`_expected_extension_differential()`、`_reward_stance_coordination()`；
-- `_reward_support_stability()`；
+- `_reward_feet_anchor()`、`_reward_feet_contact()`；
 - hard low-height、hard tilt、termination；
 - payload/COM 物理关联；
 - height deficit、腿长 spread、协调残差 p95、body/support score 等 episode diagnostics。

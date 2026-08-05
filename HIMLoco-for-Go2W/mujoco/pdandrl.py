@@ -232,34 +232,16 @@ def get_obs(actions, default_dof_pos, commands):
         dof_vel[i] = get_sensor_data(n + "_vel")[0]
 
     cmds = torch.tensor(commands, device=device)
-    normalization = commands_cfg.get("normalization")
-    if normalization is not None and len(commands) == 6:
-        normalized_commands = torch.zeros_like(cmds)
-        normalized_commands[2] = torch.clamp(
-            cmds[2] / float(normalization["max_abs_yaw"]), -1.0, 1.0
-        )
-        normalized_commands[3] = torch.clamp(
-            cmds[3] / float(normalization["max_abs_roll"]), -1.0, 1.0
-        )
-        normalized_commands[4] = torch.clamp(
-            cmds[4] / float(normalization["max_abs_pitch"]), -1.0, 1.0
-        )
-        default_height = float(normalization["default_height"])
-        crouch_span = default_height - float(normalization["min_height"])
-        normalized_commands[5] = torch.clamp(
-            (cmds[5] - default_height) / crouch_span, -1.0, 0.0
-        )
-    else:
-        commands_scale = torch.tensor(
-            commands_cfg.get("scales", default_command_scales), device=device
-        )
-        normalized_commands = cmds * commands_scale
+    commands_scale = torch.tensor(
+        commands_cfg.get("scales", default_command_scales), device=device
+    )
+    scaled_commands = cmds * commands_scale
     effective_actions = actions.clone()
     effective_actions[wheel_ids] = 0.0
     return torch.cat([
         imu_gyro * sf["scale_ang_vel"],
         projected_gravity,
-        normalized_commands,
+        scaled_commands,
         (dof_pos - default_dof_pos) * sf["scale_dof_pos"],
         dof_vel * sf["scale_dof_vel"],
         effective_actions

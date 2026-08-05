@@ -52,12 +52,7 @@ commands:
     - body_roll
     - body_pitch
     - body_height
-  normalization:
-    max_abs_yaw: 0.10
-    max_abs_roll: 0.26
-    max_abs_pitch: 0.26
-    min_height: 0.40
-    default_height: 0.54
+  scales: [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
   ranges:
     lin_vel_x: [0.0, 0.0]
     lin_vel_y: [0.0, 0.0]

@@ -10,49 +10,6 @@ def wrap_to_pi(angle):
     return torch.atan2(torch.sin(angle), torch.cos(angle))
 
 
-def normalize_dance_commands(
-    commands,
-    default_height,
-    min_height,
-    max_abs_yaw,
-    max_abs_roll,
-    max_abs_pitch,
-):
-    """Normalize [vx, vy, yaw_error, roll, pitch, absolute_height].
-
-    The dance task deliberately supports crouching only: ``default_height`` is
-    both the neutral and maximum height. Heights above it are clipped to neutral
-    instead of creating an untrainable upward command.
-    """
-    if commands.shape[-1] != 6:
-        raise ValueError(f"expected six dance commands, got {commands.shape[-1]}")
-    if min_height >= default_height:
-        raise ValueError("min_height must be below default_height")
-    for name, limit in (
-        ("max_abs_yaw", max_abs_yaw),
-        ("max_abs_roll", max_abs_roll),
-        ("max_abs_pitch", max_abs_pitch),
-    ):
-        if limit <= 0.0:
-            raise ValueError(f"{name} must be positive")
-
-    normalized = torch.zeros_like(commands)
-    normalized[..., 2] = torch.clamp(
-        commands[..., 2] / max_abs_yaw, -1.0, 1.0
-    )
-    normalized[..., 3] = torch.clamp(
-        commands[..., 3] / max_abs_roll, -1.0, 1.0
-    )
-    normalized[..., 4] = torch.clamp(
-        commands[..., 4] / max_abs_pitch, -1.0, 1.0
-    )
-    crouch_span = default_height - min_height
-    normalized[..., 5] = torch.clamp(
-        (commands[..., 5] - default_height) / crouch_span, -1.0, 0.0
-    )
-    return normalized
-
-
 def target_projected_gravity(roll, pitch):
     """Gravity expected in body coordinates at the requested roll/pitch."""
     cos_pitch = torch.cos(pitch)

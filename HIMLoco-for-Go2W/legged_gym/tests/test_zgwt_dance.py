@@ -19,7 +19,6 @@ height_tracking_score = UTILS.height_tracking_score
 leg_extension_from_knee = UTILS.leg_extension_from_knee
 low_pass_alpha = UTILS.low_pass_alpha
 neutral_command_weight = UTILS.neutral_command_weight
-normalize_dance_commands = UTILS.normalize_dance_commands
 select_wheel_factors = UTILS.select_wheel_factors
 stance_coordination_score = UTILS.stance_coordination_score
 target_projected_gravity = UTILS.target_projected_gravity
@@ -92,6 +91,7 @@ class TestZGWTDanceMath(unittest.TestCase):
         probabilities = ast.literal_eval(assignments["mode_probabilities"])
         self.assertEqual(len(probabilities), 16)
         self.assertAlmostEqual(sum(probabilities), 1.0, places=7)
+        self.assertFalse(ast.literal_eval(assignments["curriculum"]))
         forbidden = {
             "initial_stage",
             "max_stage",
@@ -100,6 +100,225 @@ class TestZGWTDanceMath(unittest.TestCase):
             "stage_range_scales",
         }
         self.assertTrue(forbidden.isdisjoint(assignments))
+
+    def test_pose_range_curriculum_is_generated_from_endpoints(self):
+        commands = self._commands_config_node()
+        assignments = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in commands.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertTrue(assignments["pose_range_curriculum_enabled"])
+        self.assertEqual(assignments["pose_range_curriculum_start_level"], 0)
+        self.assertEqual(
+            assignments["pose_range_start"],
+            {
+                "body_yaw": 0.03,
+                "body_roll": 0.08,
+                "body_pitch": 0.08,
+            },
+        )
+        self.assertEqual(
+            assignments["pose_range_final"],
+            {
+                "body_yaw": 0.10,
+                "body_roll": 0.26,
+                "body_pitch": 0.26,
+            },
+        )
+        self.assertEqual(assignments["pose_range_num_levels"], 5)
+        self.assertEqual(assignments["pose_range_min_level_time_s"], 300.0)
+        self.assertEqual(assignments["pose_curriculum_min_episodes"], 1024)
+        self.assertEqual(
+            assignments["pose_curriculum_tracking_threshold"], 0.85
+        )
+        self.assertEqual(
+            assignments["pose_curriculum_max_failure_rate"], 0.05
+        )
+        self.assertEqual(
+            assignments["pose_curriculum_max_anchor_cost"], 0.20
+        )
+        self.assertEqual(
+            assignments["pose_curriculum_max_contact_cost"], 0.05
+        )
+        self.assertEqual(
+            assignments["pose_curriculum_required_success_windows"], 2
+        )
+        for removed_name in (
+            "pose_curriculum_stage_times_s",
+            "pose_mode_curriculum_enabled",
+            "pose_mode_curriculum_start_stage",
+            "pose_curriculum_ranges",
+            "pose_curriculum_mode_probabilities",
+        ):
+            self.assertNotIn(removed_name, assignments)
+
+    def test_pose_range_levels_interpolate_and_advance(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        methods = {
+            node.name: node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in (
+                "_pose_range_limits_for_level",
+                "_advance_pose_range_curriculum",
+            )
+        }
+        namespace = {}
+        exec(
+            compile(
+                ast.Module(body=list(methods.values()), type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+        commands = type(
+            "Commands",
+            (),
+            {
+                "pose_range_curriculum_enabled": True,
+                "pose_range_start": {
+                    "body_yaw": 0.03,
+                    "body_roll": 0.08,
+                    "body_pitch": 0.08,
+                },
+                "pose_range_final": {
+                    "body_yaw": 0.10,
+                    "body_roll": 0.26,
+                    "body_pitch": 0.26,
+                },
+                "pose_range_num_levels": 5,
+            },
+        )
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = type("Config", (), {"commands": commands})
+        dummy.command_ranges = {"body_height": [0.48, 0.48]}
+        limits_for_level = namespace["_pose_range_limits_for_level"]
+        expected_yaw = [0.0300, 0.0475, 0.0650, 0.0825, 0.1000]
+        expected_tilt = [0.080, 0.125, 0.170, 0.215, 0.260]
+        for level in range(5):
+            ranges = limits_for_level(dummy, level)
+            self.assertAlmostEqual(ranges["body_yaw"][1], expected_yaw[level])
+            self.assertAlmostEqual(ranges["body_roll"][1], expected_tilt[level])
+            self.assertAlmostEqual(ranges["body_pitch"][1], expected_tilt[level])
+            self.assertAlmostEqual(ranges["body_yaw"][0], -expected_yaw[level])
+            self.assertEqual(ranges["body_height"], [0.48, 0.48])
+
+        dummy.pose_range_curriculum_level = 0
+        dummy.pose_range_level_start_step = 0
+        dummy.common_step_counter = 123
+        advance = namespace["_advance_pose_range_curriculum"]
+        self.assertTrue(advance(dummy))
+        self.assertEqual(dummy.pose_range_curriculum_level, 1)
+        self.assertEqual(dummy.pose_range_level_start_step, 123)
+        dummy.pose_range_curriculum_level = 4
+        self.assertFalse(advance(dummy))
+        commands.pose_range_curriculum_enabled = False
+        self.assertFalse(advance(dummy))
+
+    def test_pose_range_upgrade_requires_time_and_stable_windows(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        methods = {
+            node.name: node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in (
+                "_advance_pose_range_curriculum",
+                "_update_pose_range_curriculum",
+            )
+        }
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(body=list(methods.values()), type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+        commands = type(
+            "Commands",
+            (),
+            {
+                "pose_range_curriculum_enabled": True,
+                "pose_range_num_levels": 5,
+                "pose_range_min_level_time_s": 300.0,
+                "pose_curriculum_min_episodes": 2,
+                "pose_curriculum_tracking_threshold": 0.85,
+                "pose_curriculum_max_failure_rate": 0.05,
+                "pose_curriculum_max_anchor_cost": 0.20,
+                "pose_curriculum_max_contact_cost": 0.05,
+                "pose_curriculum_required_success_windows": 2,
+            },
+        )
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = type("Config", (), {"commands": commands})
+        dummy.dt = 1.0
+        dummy.common_step_counter = 299
+        dummy.pose_range_level_start_step = 0
+        dummy.pose_range_curriculum_level = 0
+        dummy.pose_curriculum_episode_count = 0
+        dummy.pose_curriculum_tracking_sum = 0.0
+        dummy.pose_curriculum_failure_count = 0
+        dummy.pose_curriculum_anchor_cost_sum = 0.0
+        dummy.pose_curriculum_contact_cost_sum = 0.0
+        dummy.pose_curriculum_success_windows = 0
+        dummy.last_pose_curriculum_tracking_quality = 0.0
+        dummy.last_pose_curriculum_failure_rate = 1.0
+        dummy.last_pose_curriculum_anchor_cost = 0.0
+        dummy.last_pose_curriculum_contact_cost = 0.0
+        dummy.episode_length_buf = torch.tensor([10, 10])
+        dummy.time_out_buf = torch.tensor([True, True])
+        dummy.reward_scales = {
+            "tracking_body_roll": 1.0,
+            "tracking_body_pitch": 1.0,
+            "tracking_body_yaw": 1.0,
+            "tracking_body_height": 1.0,
+            "feet_anchor": -1.0,
+            "feet_contact": -1.0,
+        }
+        dummy.episode_sums = {
+            "tracking_body_roll": torch.tensor([9.0, 9.0]),
+            "tracking_body_pitch": torch.tensor([9.0, 9.0]),
+            "tracking_body_yaw": torch.tensor([9.0, 9.0]),
+            "tracking_body_height": torch.tensor([9.0, 9.0]),
+            "feet_anchor": torch.tensor([-1.0, -1.0]),
+            "feet_contact": torch.tensor([-0.1, -0.1]),
+        }
+        advance = namespace["_advance_pose_range_curriculum"]
+        dummy._advance_pose_range_curriculum = lambda: advance(dummy)
+        update = namespace["_update_pose_range_curriculum"]
+        env_ids = torch.tensor([0, 1])
+
+        # 指标虽达标，但本级训练时间不足，不能累计成功窗口。
+        update(dummy, env_ids)
+        self.assertEqual(dummy.pose_curriculum_success_windows, 0)
+        self.assertEqual(dummy.pose_range_curriculum_level, 0)
+
+        # 达到最短时间后，必须连续通过两个完整统计窗口才升级。
+        dummy.common_step_counter = 300
+        update(dummy, env_ids)
+        self.assertEqual(dummy.pose_curriculum_success_windows, 1)
+        self.assertEqual(dummy.pose_range_curriculum_level, 0)
+        dummy.common_step_counter = 301
+        update(dummy, env_ids)
+        self.assertEqual(dummy.pose_range_curriculum_level, 1)
+        self.assertEqual(dummy.pose_curriculum_success_windows, 0)
+        self.assertEqual(dummy.pose_range_level_start_step, 301)
 
     def test_first_stage_uses_near_full_arm_payload(self):
         dance = self._dance_config_node()
@@ -208,7 +427,10 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertEqual(scale_values["tracking_lin_vx"], 4.0)
         self.assertEqual(scale_values["tracking_lin_vy"], 4.0)
         self.assertEqual(scale_values["stance_coordination"], 4.0)
-        self.assertEqual(scale_values["feet_outward"], 0.0)
+        self.assertEqual(scale_values["support_stability"], 0.0)
+        self.assertEqual(scale_values["feet_anchor"], -3.0)
+        self.assertEqual(scale_values["feet_contact"], -0.5)
+        self.assertEqual(scale_values["feet_outward"], -1.0)
         self.assertNotIn("tracking_body_orientation", scale_values)
         self.assertNotIn("neutral_joint_pose", scale_values)
         self.assertNotIn("action_smoothness", scale_values)
@@ -220,11 +442,12 @@ class TestZGWTDanceMath(unittest.TestCase):
             and isinstance(node.targets[0], ast.Name)
         }
         self.assertEqual(reward_values["feet_anchor_deadzone"], 0.010)
+        self.assertEqual(reward_values["feet_anchor_penalty_scale"], 0.020)
+        self.assertEqual(reward_values["feet_anchor_mean_weight"], 0.35)
+        self.assertEqual(reward_values["feet_anchor_max_weight"], 0.65)
+        self.assertEqual(reward_values["support_min_contact_force"], 5.0)
         self.assertEqual(
-            reward_values["feet_position_tracking_sigma"], 0.0004
-        )
-        self.assertEqual(
-            reward_values["max_foot_position_tracking_sigma"], 0.000225
+            reward_values["severe_individual_foot_drift"], 0.10
         )
 
     def test_reward_dispatch_is_inherited_from_legged_robot(self):
@@ -320,7 +543,7 @@ class TestZGWTDanceMath(unittest.TestCase):
             translated_excess, torch.zeros_like(translated_excess)
         )
 
-    def test_support_stability_uses_each_world_foot_anchor(self):
+    def test_feet_anchor_uses_each_world_foot_and_smooth_l1_cost(self):
         path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         dance = next(
@@ -333,18 +556,22 @@ class TestZGWTDanceMath(unittest.TestCase):
             for node in dance.body
             if isinstance(node, ast.FunctionDef)
         }
-        support_source = ast.dump(methods["_reward_support_stability"])
-        self.assertIn("_feet_anchor_excess", support_source)
-        self.assertIn("max_foot_position_tracking_sigma", support_source)
-        self.assertIn("support_min_contact_force", support_source)
-        self.assertNotIn("_support_center_drift", support_source)
-        self.assertNotIn("_support_anchor_excess", methods)
+        anchor_source = ast.dump(methods["_reward_feet_anchor"])
+        self.assertIn("_feet_anchor_excess", anchor_source)
+        self.assertIn("feet_anchor_penalty_scale", anchor_source)
+        self.assertIn("feet_anchor_mean_weight", anchor_source)
+        self.assertIn("feet_anchor_max_weight", anchor_source)
+        self.assertNotIn("_support_center_drift", anchor_source)
+        self.assertNotIn("_reward_support_stability", methods)
 
         namespace = {"torch": torch}
         exec(
             compile(
                 ast.Module(
-                    body=[methods["_feet_anchor_excess"]],
+                    body=[
+                        methods["_feet_anchor_excess"],
+                        methods["_reward_feet_anchor"],
+                    ],
                     type_ignores=[],
                 ),
                 str(path),
@@ -352,7 +579,16 @@ class TestZGWTDanceMath(unittest.TestCase):
             ),
             namespace,
         )
-        rewards = type("Rewards", (), {"feet_anchor_deadzone": 0.01})
+        rewards = type(
+            "Rewards",
+            (),
+            {
+                "feet_anchor_deadzone": 0.01,
+                "feet_anchor_penalty_scale": 0.02,
+                "feet_anchor_mean_weight": 0.35,
+                "feet_anchor_max_weight": 0.65,
+            },
+        )
         dummy = type("Dummy", (), {})()
         dummy.cfg = type("Config", (), {"rewards": rewards})
         dummy.episode_start_feet_xy = torch.zeros(1, 4, 2)
@@ -364,6 +600,45 @@ class TestZGWTDanceMath(unittest.TestCase):
             excess,
             torch.tensor([[0.0, 0.01, 0.02, 0.03]]),
         )
+        dummy._feet_anchor_excess = lambda: namespace[
+            "_feet_anchor_excess"
+        ](dummy)
+        cost = namespace["_reward_feet_anchor"](dummy)
+        torch.testing.assert_close(cost, torch.tensor([0.7921875]))
+
+    def test_feet_contact_penalizes_each_vertical_force_deficit(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        method = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_reward_feet_contact"
+        )
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(body=[method], type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+
+        rewards = type("Rewards", (), {"support_min_contact_force": 5.0})
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = type("Config", (), {"rewards": rewards})
+        dummy.feet_indices = torch.tensor([0, 1, 2, 3])
+        dummy.contact_forces = torch.zeros(1, 4, 3)
+        dummy.contact_forces[0, :, 2] = torch.tensor([5.0, 2.5, 0.0, 10.0])
+
+        cost = namespace["_reward_feet_contact"](dummy)
+        torch.testing.assert_close(cost, torch.tensor([0.3125]))
 
     def test_abad_outward_penalty_uses_left_and_right_joint_direction(self):
         path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
@@ -406,7 +681,7 @@ class TestZGWTDanceMath(unittest.TestCase):
             torch.tensor([[0.10, 0.05, 0.0, 0.0]]),
         )
 
-    def test_severe_support_loss_is_a_termination_condition(self):
+    def test_support_center_loss_remains_a_termination_condition(self):
         path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         dance = next(
@@ -432,6 +707,51 @@ class TestZGWTDanceMath(unittest.TestCase):
         }
         self.assertIn("_support_center_drift", called_methods)
         self.assertIn("severe_support_loss_distance", accessed_attributes)
+        self.assertNotIn(
+            "severe_individual_foot_drift", accessed_attributes
+        )
+
+    def test_severe_support_penalty_includes_individual_foot_drift(self):
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
+        )
+        method = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_reward_severe_support_loss"
+        )
+        namespace = {"torch": torch}
+        exec(
+            compile(
+                ast.Module(body=[method], type_ignores=[]),
+                str(path),
+                "exec",
+            ),
+            namespace,
+        )
+
+        rewards = type(
+            "Rewards",
+            (),
+            {
+                "severe_support_loss_distance": 0.20,
+                "severe_individual_foot_drift": 0.10,
+            },
+        )
+        dummy = type("Dummy", (), {})()
+        dummy.cfg = type("Config", (), {"rewards": rewards})
+        dummy._support_center_drift = lambda: torch.tensor([0.19, 0.21, 0.0])
+        dummy.episode_start_feet_xy = torch.zeros(3, 4, 2)
+        dummy.feet_pos = torch.zeros(3, 4, 3)
+        dummy.feet_pos[0, 2, 0] = 0.11
+
+        penalty = namespace["_reward_severe_support_loss"](dummy)
+        torch.testing.assert_close(penalty, torch.tensor([1.0, 1.0, 0.0]))
 
     def test_planar_velocity_commands_are_fixed_to_zero(self):
         commands = self._commands_config_node()
@@ -456,27 +776,36 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertEqual(one_step * 6, 360)
         self.assertEqual(privileged, 78)
 
-    def test_command_endpoint_normalization_crouch_only(self):
-        commands = torch.tensor(
-            [
-                [0.0, 0.0, -0.10, -0.26, -0.26, 0.40],
-                [0.0, 0.0, 0.00, 0.00, 0.00, 0.54],
-                [0.0, 0.0, 0.10, 0.26, 0.26, 0.55],
-            ]
+    def test_command_observation_uses_pre_normalization_fixed_scales(self):
+        commands = self._commands_config_node()
+        assignments = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in commands.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertEqual(
+            assignments["command_scales"],
+            [2.0, 2.0, 1.0, 1.0, 1.0, 2.0],
         )
-        normalized = normalize_dance_commands(
-            commands, 0.54, 0.40, 0.10, 0.26, 0.26
+
+        path = Path(__file__).parents[1] / "envs" / "zgwt" / "zgwt_dance_robot.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dance = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ZgwtDance"
         )
-        torch.testing.assert_close(
-            normalized[0], torch.tensor([0.0, 0.0, -1.0, -1.0, -1.0, -1.0])
+        method = next(
+            node
+            for node in dance.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_build_current_observation"
         )
-        torch.testing.assert_close(
-            normalized[1], torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        )
-        # Upward requests are clipped to neutral because the task cannot rise.
-        torch.testing.assert_close(
-            normalized[2], torch.tensor([0.0, 0.0, 1.0, 1.0, 1.0, 0.0])
-        )
+        method_source = ast.dump(method)
+        self.assertIn("commands_scale", method_source)
+        self.assertIn("_body_yaw_error", method_source)
+        self.assertNotIn("normalize_dance_commands", method_source)
 
     def test_yaw_wrap(self):
         wrapped = wrap_to_pi(torch.tensor([math.pi + 0.2, -math.pi - 0.2]))

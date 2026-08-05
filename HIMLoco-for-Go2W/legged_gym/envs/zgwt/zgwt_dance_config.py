@@ -44,67 +44,82 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
 
     class commands(ZGWTRoughCfg.commands):
         # [vx, vy, body_yaw_error, body_roll, body_pitch, body_height]
-        # The sampled body_yaw target is stored separately. The actor receives
-        # target_yaw - current_relative_yaw in command slot 2.
+        # body_yaw 目标单独保存；actor 的第 2 个命令槽接收相对 yaw 误差。
         num_commands = 6
+        # 关闭父类 Go2W 的线速度课程，避免它把 lin_vel_x 从 0 自动扩大。
+        # pose_range_curriculum_enabled 是独立的姿态角范围课程开关。
         curriculum = False
         heading_command = False
         resampling_time = 8.0
         command_filter_time_constant = 0.5
-        # Independent hard limit for body-yaw target changes. A full reversal
-        # from +0.10 to -0.10 rad therefore takes at least 0.67 seconds.
+        # yaw 目标变化的独立硬限速；从 +0.10 到 -0.10 rad 至少需要 0.67 s。
         yaw_slew_rate = 0.30
-        # 固定 observation normalization，人工阶段切换时不要修改。
+        # 下面三个范围仍供姿态协调 reward 计算命令相对幅度，不参与
+        # actor command observation 的除法归一化。
         max_abs_yaw = 0.10
         max_abs_roll = 0.26
         max_abs_pitch = 0.26
         min_height = 0.40
-
-
-
+        command_scales = [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
         # 模式顺序固定为：
         # 0 neutral, 1 height, 2 roll, 3 pitch, 4 yaw,
         # 5 roll+pitch, 6 roll+yaw, 7 pitch+yaw, 8 roll+pitch+yaw,
         # 9 height+roll, 10 height+pitch, 11 height+yaw,
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
-
-
+        # 命令模式不参与自动课程。每次训练要开放哪些模式，只修改这里。
         mode_probabilities = [
             0.40, 0.0, 0.20, 0.20, 0.20,
             0.00, 0.00, 0.00, 0.00,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
 
+        # 仅对 yaw、roll、pitch 的对称命令范围做自动课程。
+        # 中断后若从某一级 checkpoint 续训，可手动设置 start_level。
+        pose_range_curriculum_enabled = True
+        pose_range_curriculum_start_level = 0
+        pose_range_start = {
+            "body_yaw": 0.03,
+            "body_roll": 0.08,
+            "body_pitch": 0.08,
+        }
+        pose_range_final = {
+            "body_yaw": 0.10,
+            "body_roll": 0.26,
+            "body_pitch": 0.26,
+        }
+        pose_range_num_levels = 5
 
+        # 每一级至少训练 300 s（约 625 次 48-step PPO iteration），然后才
+        # 根据完整 episode 的跟踪、失败、足端锚定和接触指标判断是否升级。
+        # 固定时间只作为最低训练量，不会到点强制升级。
+        pose_range_min_level_time_s = 300.0
+        pose_curriculum_min_episodes = 1024
+        pose_curriculum_tracking_threshold = 0.85
+        pose_curriculum_max_failure_rate = 0.05
+        pose_curriculum_max_anchor_cost = 0.20
+        pose_curriculum_max_contact_cost = 0.05
+        pose_curriculum_required_success_windows = 2
 
         class ranges:
-            # Linear velocity remains zero. body_yaw is a bounded angle relative
-            # to the heading captured at episode reset, not a continuous turn rate.
+            # 线速度始终为零。body_yaw 是相对 episode 初始朝向的有限角度，
+            # 不是连续旋转的 yaw 角速度。
             lin_vel_x = [0.0, 0.0]
             lin_vel_y = [0.0, 0.0]
-
-
             body_yaw = [-0.03, 0.03]
             body_roll = [-0.08, 0.08]
             body_pitch = [-0.08, 0.08]
             body_height = [0.48, 0.48]
 
-            # 阶段 2、3、4：
-            # body_yaw = [-0.10, 0.10]
-            # body_roll = [-0.26, 0.26]
-            # body_pitch = [-0.26, 0.26]
-            # body_height = [0.40, 0.54]
-
     class domain_rand(ZGWTRoughCfg.domain_rand):
         randomize_payload_mass = True
         # 第一阶段只训练接近完整机械臂的持续重载，不再让大量轻载环境稀释
         # 满载下的屈腿承压和防外八梯度。
-        payload_mass_range = [6.0, 10.0]
+        payload_mass_range = [-1, 10.0]
         randomize_com_displacement = True
         correlate_payload_and_com = True
-        equivalent_payload_com_min = [-0.4, -0.05, 0.2]  #质心偏移，考虑机械臂的位置主要在-x +z
-        equivalent_payload_com_max = [-0.2, 0.05, 0.5]
+        equivalent_payload_com_min = [0.2, -0.05, -0.2]  #质心偏移，考虑机械臂的位置主要在-x +z
+        equivalent_payload_com_max = [-0.2, 0.05, 0.2]
         com_displacement_range = [-1.0, 1.0]
         com_displacement_is_offset = True
         randomize_link_mass = False
@@ -151,8 +166,10 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             # 稳定
             body_stability = 3.0
             stance_coordination = 4.0
-            support_stability = 3.0  #约束轮足世界坐标和有效接触
-           
+            support_stability = 0.0
+            feet_anchor = -3.0    #惩罚轮子偏离驻足世界坐标系
+            feet_contact = -0.5   #轮子接触
+            feet_outward = -1.0   #惩罚轮子外八
 
             # 平滑
             action_rate = -0.01  #惩罚action变化
@@ -195,10 +212,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         stance_hip_y = [0.104, -0.104, 0.104, -0.104]
 
         support_min_contact_force = 5.0
-        support_contact_sigma = 0.25
 
-        # 单独约束每只轮足相对出生锚点向身体外侧滑动，避免四脚对称外八时
-        # 支撑中心保持不变，从而绕过 support_stability。
+        # 弱保留外八方向先验；完整世界坐标 feet_anchor 是主要防滑约束。
         feet_outward_deadzone = 0.005
         feet_outward_sigma = 0.0004
         abad_outward_deadzone = 0.050
@@ -210,11 +225,11 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         active_height_threshold = 0.02
         neutral_command_sigma = 0.20
 
-        # 四个轮足在 episode 初始世界坐标附近保持驻足。平均项约束整体滑动，
-        # 最大项专门捕捉单轮异常；1 cm 死区过滤接触求解器的小幅抖动。
-        feet_position_tracking_sigma = 0.0004
-        max_foot_position_tracking_sigma = 0.000225
+        # 四轮世界坐标 anchor 使用 Smooth-L1；最大单轮项权重大于平均项。
         feet_anchor_deadzone = 0.010
+        feet_anchor_penalty_scale = 0.020
+        feet_anchor_mean_weight = 0.35
+        feet_anchor_max_weight = 0.65
 
         default_body_height = 0.48   # 带臂时允许四腿主动屈曲，以较低姿态承压
         hard_min_height = 0.36
@@ -223,6 +238,7 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         termination_min_height = 0.32
         severe_wheel_park_error = 0.35
         severe_support_loss_distance = 0.20
+        severe_individual_foot_drift = 0.10
 
 class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
     class policy(ZGWTRoughCfgPPO.policy):
@@ -245,24 +261,16 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage1_v2_8.4"
+        run_name = "stage1_v3_8.4"
         # 小范围姿态阶段频繁保存，优先检查 400/800/1200。
-        save_interval = 100
-        max_iterations = 10000
-        # 仅修改 mode probabilities、command ranges、noise 或窄范围随机化：
-        # 可保留 actor/critic/estimator，optimizer 是否保留应做短对照。
-        # 仅小幅修改某个 reward 权重：
-        # resume=True, load_actor_only=False, load_optimizer=False。
-        # 修改核心 reward、reward 尺度或 privileged observation：
-        # resume=True, load_actor_only=True, load_optimizer=False。
-        # 修改 actor observation 维度/顺序或 action 维度后，旧 actor 不兼容。
-        resume = True
-        # 人工切换到新训练阶段时只继承模型权重，不继承上一阶段的迭代编号。
-        # 同一阶段中断后续训时必须临时改为 False。
-        reset_iteration_on_load = True
+        save_interval = 200
+        max_iterations = 20000
+        resume = False   #从 checkpoint 继续训练时必须改为 True
+   
+        reset_iteration_on_load = False  #是否重置迭代编号
         # reward 聚合与 critic 目标已改变，只继承接口仍兼容的 actor/estimator。
-        load_actor_only = True
+        load_actor_only = False
         # 同时重置 Adam，避免旧 reward 的优化器动量污染新阶段。
-        load_optimizer = False
-        load_run = "Aug04_15-12-15_stage0a_h48"
-        checkpoint = 1600
+        # load_optimizer = False
+        # load_run = "Aug04_18-29-13_stage1_v2_8.4"
+        # checkpoint = 500

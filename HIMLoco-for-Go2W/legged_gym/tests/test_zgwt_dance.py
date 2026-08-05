@@ -20,6 +20,7 @@ leg_extension_from_knee = UTILS.leg_extension_from_knee
 low_pass_alpha = UTILS.low_pass_alpha
 neutral_command_weight = UTILS.neutral_command_weight
 select_wheel_factors = UTILS.select_wheel_factors
+smooth_l1_excess_cost = UTILS.smooth_l1_excess_cost
 stance_coordination_score = UTILS.stance_coordination_score
 target_projected_gravity = UTILS.target_projected_gravity
 wrap_to_pi = UTILS.wrap_to_pi
@@ -112,21 +113,29 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertTrue(assignments["pose_range_curriculum_enabled"])
         self.assertEqual(assignments["pose_range_curriculum_start_level"], 0)
         self.assertEqual(
-            assignments["pose_range_start"],
-            {
-                "body_yaw": 0.03,
-                "body_roll": 0.08,
-                "body_pitch": 0.08,
-            },
-        )
-        self.assertEqual(
             assignments["pose_range_final"],
             {
                 "body_yaw": 0.10,
                 "body_roll": 0.26,
                 "body_pitch": 0.26,
+                "body_height": 0.48,
             },
         )
+        ranges_node = next(
+            node
+            for node in commands.body
+            if isinstance(node, ast.ClassDef) and node.name == "ranges"
+        )
+        initial_ranges = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in ranges_node.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertEqual(initial_ranges["body_yaw"], [-0.03, 0.03])
+        self.assertEqual(initial_ranges["body_roll"], [-0.08, 0.08])
+        self.assertEqual(initial_ranges["body_pitch"], [-0.08, 0.08])
+        self.assertEqual(initial_ranges["body_height"], [0.48, 0.48])
         self.assertEqual(assignments["pose_range_num_levels"], 5)
         self.assertEqual(assignments["pose_range_min_level_time_s"], 300.0)
         self.assertEqual(assignments["pose_curriculum_min_episodes"], 1024)
@@ -151,6 +160,7 @@ class TestZGWTDanceMath(unittest.TestCase):
             "pose_mode_curriculum_start_stage",
             "pose_curriculum_ranges",
             "pose_curriculum_mode_probabilities",
+            "pose_range_start",
         ):
             self.assertNotIn(removed_name, assignments)
 
@@ -185,22 +195,23 @@ class TestZGWTDanceMath(unittest.TestCase):
             (),
             {
                 "pose_range_curriculum_enabled": True,
-                "pose_range_start": {
-                    "body_yaw": 0.03,
-                    "body_roll": 0.08,
-                    "body_pitch": 0.08,
-                },
                 "pose_range_final": {
                     "body_yaw": 0.10,
                     "body_roll": 0.26,
                     "body_pitch": 0.26,
+                    "body_height": 0.48,
                 },
                 "pose_range_num_levels": 5,
             },
         )
         dummy = type("Dummy", (), {})()
         dummy.cfg = type("Config", (), {"commands": commands})
-        dummy.command_ranges = {"body_height": [0.48, 0.48]}
+        dummy.command_ranges = {
+            "body_yaw": [-0.03, 0.03],
+            "body_roll": [-0.08, 0.08],
+            "body_pitch": [-0.08, 0.08],
+            "body_height": [0.48, 0.48],
+        }
         limits_for_level = namespace["_pose_range_limits_for_level"]
         expected_yaw = [0.0300, 0.0475, 0.0650, 0.0825, 0.1000]
         expected_tilt = [0.080, 0.125, 0.170, 0.215, 0.260]
@@ -211,6 +222,13 @@ class TestZGWTDanceMath(unittest.TestCase):
             self.assertAlmostEqual(ranges["body_pitch"][1], expected_tilt[level])
             self.assertAlmostEqual(ranges["body_yaw"][0], -expected_yaw[level])
             self.assertEqual(ranges["body_height"], [0.48, 0.48])
+
+        # 如果以后修改最终高度，同一套插值会从 ranges 初始高度平滑过渡。
+        commands.pose_range_final = dict(commands.pose_range_final)
+        commands.pose_range_final["body_height"] = 0.42
+        self.assertEqual(
+            limits_for_level(dummy, 4)["body_height"], [0.42, 0.42]
+        )
 
         dummy.pose_range_curriculum_level = 0
         dummy.pose_range_level_start_step = 0
@@ -428,9 +446,11 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertEqual(scale_values["tracking_lin_vy"], 4.0)
         self.assertEqual(scale_values["stance_coordination"], 4.0)
         self.assertEqual(scale_values["support_stability"], 0.0)
+        self.assertEqual(scale_values["base_height_deficit"], -4.0)
+        self.assertEqual(scale_values["knee_clearance"], -3.0)
         self.assertEqual(scale_values["feet_anchor"], -3.0)
         self.assertEqual(scale_values["feet_contact"], -0.5)
-        self.assertEqual(scale_values["feet_outward"], -1.0)
+        self.assertEqual(scale_values["feet_outward"], -2.0)
         self.assertNotIn("tracking_body_orientation", scale_values)
         self.assertNotIn("neutral_joint_pose", scale_values)
         self.assertNotIn("action_smoothness", scale_values)
@@ -446,6 +466,13 @@ class TestZGWTDanceMath(unittest.TestCase):
         self.assertEqual(reward_values["feet_anchor_mean_weight"], 0.35)
         self.assertEqual(reward_values["feet_anchor_max_weight"], 0.65)
         self.assertEqual(reward_values["support_min_contact_force"], 5.0)
+        self.assertEqual(reward_values["stance_coordination_deadzone"], 0.005)
+        self.assertEqual(reward_values["stance_coordination_sigma"], 0.0001)
+        self.assertEqual(reward_values["height_deficit_penalty_scale"], 0.020)
+        self.assertEqual(reward_values["min_knee_clearance"], 0.20)
+        self.assertEqual(reward_values["knee_clearance_penalty_scale"], 0.040)
+        self.assertEqual(reward_values["abad_outward_deadzone"], 0.030)
+        self.assertEqual(reward_values["abad_outward_sigma"], 0.010)
         self.assertEqual(
             reward_values["severe_individual_foot_drift"], 0.10
         )
@@ -856,6 +883,32 @@ class TestZGWTDanceMath(unittest.TestCase):
         torch.testing.assert_close(score[:2], symmetric_only[:2])
         self.assertLess(score[2], symmetric_only[2])
         torch.testing.assert_close(score[3], symmetric_only[3])
+
+    def test_smooth_l1_excess_cost_has_physical_deadzone_scale(self):
+        cost = smooth_l1_excess_cost(
+            torch.tensor([-0.01, 0.0, 0.01, 0.02, 0.04]),
+            penalty_scale=0.02,
+        )
+        torch.testing.assert_close(
+            cost,
+            torch.tensor([0.0, 0.0, 0.125, 0.5, 1.5]),
+        )
+
+    def test_low_height_and_low_knees_produce_continuous_costs(self):
+        height_deficit = torch.tensor([0.0, 0.01, 0.04])
+        height_cost = smooth_l1_excess_cost(height_deficit, 0.02)
+        self.assertEqual(height_cost[0].item(), 0.0)
+        self.assertTrue(height_cost[0] < height_cost[1] < height_cost[2])
+
+        knee_height = torch.tensor(
+            [[0.24, 0.22, 0.20, 0.20], [0.24, 0.22, 0.12, 0.11]]
+        )
+        knee_deficit = torch.relu(0.20 - knee_height)
+        knee_cost = torch.mean(
+            smooth_l1_excess_cost(knee_deficit, 0.04), dim=1
+        )
+        self.assertEqual(knee_cost[0].item(), 0.0)
+        self.assertGreater(knee_cost[1].item(), 0.5)
 
     def test_stance_coordination_allows_common_mode_crouch(self):
         knee = torch.tensor(

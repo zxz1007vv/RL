@@ -102,6 +102,18 @@ def height_tracking_score(
     return torch.exp(-cost)
 
 
+def smooth_l1_excess_cost(excess, penalty_scale):
+    """Convert a non-negative physical-limit violation into a smooth cost."""
+    if penalty_scale <= 0.0:
+        raise ValueError("penalty_scale must be positive")
+    normalized = torch.relu(excess) / penalty_scale
+    return torch.where(
+        normalized < 1.0,
+        0.5 * torch.square(normalized),
+        normalized - 0.5,
+    )
+
+
 def stance_coordination_score(
     leg_extension,
     expected_differential,

@@ -13,6 +13,7 @@ from .zgwt_dance_utils import (
     leg_extension_from_knee,
     low_pass_alpha,
     select_wheel_factors,
+    smooth_l1_excess_cost,
     stance_coordination_score,
 )
 
@@ -94,18 +95,44 @@ class ZgwtDance(Zgwt):
         self.command_mode_probabilities = self._normalized_probabilities(
             self.cfg.commands.mode_probabilities, "manual"
         )
-        required_range_names = {"body_yaw", "body_roll", "body_pitch"}
-        range_start = self.cfg.commands.pose_range_start
+        angle_range_names = ("body_yaw", "body_roll", "body_pitch")
+        required_range_names = set(angle_range_names) | {"body_height"}
         range_final = self.cfg.commands.pose_range_final
-        if set(range_start) != required_range_names:
-            raise ValueError("pose_range_start 必须只定义 yaw、roll、pitch")
         if set(range_final) != required_range_names:
-            raise ValueError("pose_range_final 必须只定义 yaw、roll、pitch")
-        for name in required_range_names:
-            start_max = float(range_start[name])
+            raise ValueError(
+                "pose_range_final 必须定义 yaw、roll、pitch 和 height"
+            )
+        for name in angle_range_names:
+            initial_limits = self.command_ranges[name]
+            if (
+                len(initial_limits) != 2
+                or initial_limits[1] < initial_limits[0]
+                or not math.isclose(
+                    float(initial_limits[0]),
+                    -float(initial_limits[1]),
+                    rel_tol=0.0,
+                    abs_tol=1e-8,
+                )
+            ):
+                raise ValueError(f"ranges.{name} 必须是有效的对称范围")
+            start_max = float(initial_limits[1])
             final_max = float(range_final[name])
             if start_max <= 0.0 or final_max < start_max:
                 raise ValueError(f"{name} 的课程起止范围无效")
+        initial_height_limits = self.command_ranges["body_height"]
+        if (
+            len(initial_height_limits) != 2
+            or not math.isclose(
+                float(initial_height_limits[0]),
+                float(initial_height_limits[1]),
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            or float(range_final["body_height"]) <= 0.0
+        ):
+            raise ValueError(
+                "ranges.body_height 必须是固定高度，最终高度必须为正数"
+            )
         num_levels = int(self.cfg.commands.pose_range_num_levels)
         if num_levels < 2:
             raise ValueError("姿态范围课程至少需要两级")
@@ -181,6 +208,18 @@ class ZgwtDance(Zgwt):
         body_names = self.gym.get_actor_rigid_body_names(
             self.envs[0], self.actor_handles[0]
         )
+        knee_body_indices = []
+        for leg_name in leg_order:
+            knee_link_name = f"{leg_name}_KNEE_LINK"
+            if knee_link_name not in body_names:
+                raise ValueError(
+                    f"资产缺少离地高度计算所需刚体: {knee_link_name}"
+                )
+            knee_body_indices.append(body_names.index(knee_link_name))
+        self.knee_body_indices = torch.tensor(
+            knee_body_indices, dtype=torch.long, device=self.device
+        )
+
         feet_outward_sign = []
         feet_abad_indices = []
         for body_index in self.feet_indices.tolist():
@@ -341,6 +380,7 @@ class ZgwtDance(Zgwt):
         extension_spread = torch.max(leg_extension, dim=1).values - torch.min(
             leg_extension, dim=1
         ).values
+        knee_clearance = self._knee_clearance()[env_ids]
         body_stability_score = self._reward_body_stability()[env_ids]
         feet_anchor_cost = self._reward_feet_anchor()[env_ids]
         feet_contact_cost = self._reward_feet_contact()[env_ids]
@@ -534,6 +574,15 @@ class ZgwtDance(Zgwt):
             (height_deficit > 0.0).float()
         )
         episode["mean_leg_extension_spread"] = torch.mean(extension_spread)
+        episode["mean_min_knee_clearance"] = torch.mean(
+            torch.min(knee_clearance, dim=1).values
+        )
+        episode["knee_clearance_violation_ratio"] = torch.mean(
+            (
+                knee_clearance
+                < float(self.cfg.rewards.min_knee_clearance)
+            ).float()
+        )
         episode["p95_coordination_residual"] = torch.quantile(
             coordination_abs.reshape(-1), 0.95
         )
@@ -608,17 +657,23 @@ class ZgwtDance(Zgwt):
         episode["mean_payload_com_z"] = mean_payload_com[2]
 
     def _pose_range_limits_for_level(self, level):
-        """按等级线性插值得到 yaw、roll、pitch 的对称范围。"""
+        """以 class ranges 为初始值，按等级插值到最终目标。"""
         num_levels = int(self.cfg.commands.pose_range_num_levels)
         progress = int(level) / max(num_levels - 1, 1)
         ranges = {}
         for name in ("body_yaw", "body_roll", "body_pitch"):
-            start_max = float(self.cfg.commands.pose_range_start[name])
+            start_max = float(self.command_ranges[name][1])
             final_max = float(self.cfg.commands.pose_range_final[name])
             current_max = start_max + progress * (final_max - start_max)
             ranges[name] = [-current_max, current_max]
-        # 高度不参与自动课程，始终由 ranges.body_height 手工控制。
-        ranges["body_height"] = self.command_ranges["body_height"]
+        initial_height = float(self.command_ranges["body_height"][0])
+        final_height = float(
+            self.cfg.commands.pose_range_final["body_height"]
+        )
+        current_height = initial_height + progress * (
+            final_height - initial_height
+        )
+        ranges["body_height"] = [current_height, current_height]
         return ranges
 
     def _advance_pose_range_curriculum(self):
@@ -1141,6 +1196,37 @@ class ZgwtDance(Zgwt):
         """允许四腿共模压缩，惩罚单腿或单侧差模折叠。"""
         score, _ = self._stance_coordination_score_and_residual()
         return score
+
+    def _reward_base_height_deficit(self):
+        """连续惩罚超过柔顺死区的机身下沉，避免正奖励在低位饱和。"""
+        deficit = torch.relu(
+            self.commands[:, self.HEIGHT_COMMAND]
+            - self._current_base_height()
+            - float(self.cfg.rewards.height_deficit_deadzone)
+        )
+        return smooth_l1_excess_cost(
+            deficit,
+            float(self.cfg.rewards.height_deficit_penalty_scale),
+        )
+
+    def _knee_clearance(self):
+        """返回四个膝关节中心相对平面的世界坐标高度。"""
+        body_states = self.rigid_body_states.view(
+            self.num_envs, self.num_bodies, 13
+        )
+        return body_states[:, self.knee_body_indices, 2]
+
+    def _reward_knee_clearance(self):
+        """在膝部碰撞之前连续惩罚过低的膝关节。"""
+        deficit = torch.relu(
+            float(self.cfg.rewards.min_knee_clearance)
+            - self._knee_clearance()
+        )
+        cost = smooth_l1_excess_cost(
+            deficit,
+            float(self.cfg.rewards.knee_clearance_penalty_scale),
+        )
+        return torch.mean(cost, dim=1)
 
     def _reward_feet_anchor(self):
         """用 Smooth-L1 惩罚四轮平均漂移和最大单轮漂移。"""

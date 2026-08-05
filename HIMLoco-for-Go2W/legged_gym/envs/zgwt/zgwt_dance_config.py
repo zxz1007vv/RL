@@ -67,26 +67,23 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # 9 height+roll, 10 height+pitch, 11 height+yaw,
         # 12 height+roll+pitch, 13 height+roll+yaw,
         # 14 height+pitch+yaw, 15 height+roll+pitch+yaw。
-        # 命令模式不参与自动课程。每次训练要开放哪些模式，只修改这里。
+
         mode_probabilities = [
-            0.40, 0.0, 0.20, 0.20, 0.20,
+            0.20, 0.20, 0.20, 0.20, 0.20,
             0.00, 0.00, 0.00, 0.00,
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
 
-        # 仅对 yaw、roll、pitch 的对称命令范围做自动课程。
+        # class ranges 是课程初始值；这里仅设置各命令的最终目标。
+        # 某项初始值与最终值相同，就表示该项不随课程变化。
         # 中断后若从某一级 checkpoint 续训，可手动设置 start_level。
-        pose_range_curriculum_enabled = True
+        pose_range_curriculum_enabled =False
         pose_range_curriculum_start_level = 0
-        pose_range_start = {
-            "body_yaw": 0.03,
-            "body_roll": 0.08,
-            "body_pitch": 0.08,
-        }
         pose_range_final = {
             "body_yaw": 0.10,
             "body_roll": 0.26,
             "body_pitch": 0.26,
+            "body_height": 0.48,
         }
         pose_range_num_levels = 5
 
@@ -118,8 +115,8 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         payload_mass_range = [-1, 10.0]
         randomize_com_displacement = True
         correlate_payload_and_com = True
-        equivalent_payload_com_min = [0.2, -0.05, -0.2]  #质心偏移，考虑机械臂的位置主要在-x +z
-        equivalent_payload_com_max = [-0.2, 0.05, 0.2]
+        equivalent_payload_com_min = [-0.2, -0.05, -0.2]
+        equivalent_payload_com_max = [0.2, 0.05, 0.2]
         com_displacement_range = [-1.0, 1.0]
         com_displacement_is_offset = True
         randomize_link_mass = False
@@ -164,12 +161,14 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             tracking_lin_vy = 4.0
 
             # 稳定
-            body_stability = 3.0
+            body_stability = 4.0
             stance_coordination = 4.0
             support_stability = 0.0
+            base_height_deficit = -4.0   #惩罚机身低于目标高度
+            knee_clearance = -3.0  #惩罚膝关节过度屈曲，避免低机身局部最优
             feet_anchor = -3.0    #惩罚轮子偏离驻足世界坐标系
             feet_contact = -0.5   #轮子接触
-            feet_outward = -1.0   #惩罚轮子外八
+            feet_outward = -2.0   #惩罚轮足外移和 ABAD 造成的轮子外八
 
             # 平滑
             action_rate = -0.01  #惩罚action变化
@@ -178,9 +177,9 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
             collision = -1.0
             dof_pos_limits = -2.0
             torque_limits = -0.05
-            severe_wheel_park = -4.0    #轮子驻足
-            severe_support_loss = -4.0  #支撑丢失
-            base_height_too_low = -4.0
+            severe_wheel_park = -3.0    #轮子驻足，是否转动
+            severe_support_loss = -3.0  #支撑丢失
+            base_height_too_low = -3.0
             excessive_tilt = -4.0    #过度倾斜
             termination = -10.0
 
@@ -204,19 +203,29 @@ class ZGWTDanceCfg(ZGWTRoughCfg):
         # URDF 中大腿和小腿名义长度分别为 0.26 m、0.28 m。
         thigh_length = 0.26
         shank_length = 0.28
-        stance_coordination_deadzone = 0.015
+        # residual 是单腿相对四腿均值的误差。5 mm 死区对应约 1 cm 的
+        # 前后腿伸展差；原 15 mm 会放过日志中的约 3.4 cm 前后差。
+        stance_coordination_deadzone = 0.005
         stance_command_deadzone_gain = 0.010
-        stance_coordination_sigma = 0.0004
+        stance_coordination_sigma = 0.0001
         # 顺序固定为 FBL、FAR、RBL、RAR，与代码中的膝关节索引一致。
         stance_hip_x = [0.272, 0.272, -0.272, -0.272]
         stance_hip_y = [0.104, -0.104, 0.104, -0.104]
 
         support_min_contact_force = 5.0
 
-        # 弱保留外八方向先验；完整世界坐标 feet_anchor 是主要防滑约束。
+        # 高度目标以下 2 cm 保留接触柔顺空间，再用 Smooth-L1 连续惩罚。
+        height_deficit_penalty_scale = 0.020
+        # KNEE_LINK 原点就是膝关节中心。提前在碰撞发生前约束所有四膝，
+        # 不针对后腿写特例，因而仍允许 roll/pitch 所需的协调屈伸。
+        min_knee_clearance = 0.20
+        knee_clearance_penalty_scale = 0.040
+
+        # 3 deg 的旧死区会放过肉眼可见的轮子倾斜；收紧到约 1.7 deg。
+        # sigma 暂时保持不变，先通过权重和死区温和加强，避免姿态抖动。
         feet_outward_deadzone = 0.005
         feet_outward_sigma = 0.0004
-        abad_outward_deadzone = 0.050
+        abad_outward_deadzone = 0.030
         abad_outward_sigma = 0.010
 
         # 仅供 episode diagnostics 判断命令是否激活。
@@ -261,16 +270,16 @@ class ZGWTDanceCfgPPO(ZGWTRoughCfgPPO):
 
     class runner(ZGWTRoughCfgPPO.runner):
         experiment_name = "ZGWT_DANCE"
-        run_name = "stage1_v3_8.4"
+        run_name = "stage1_v3_8.5"
         # 小范围姿态阶段频繁保存，优先检查 400/800/1200。
         save_interval = 200
         max_iterations = 20000
-        resume = False   #从 checkpoint 继续训练时必须改为 True
+        resume = True   #从 checkpoint 继续训练时必须改为 True
    
-        reset_iteration_on_load = False  #是否重置迭代编号
+        reset_iteration_on_load = True  #是否重置迭代编号
         # reward 聚合与 critic 目标已改变，只继承接口仍兼容的 actor/estimator。
-        load_actor_only = False
+        load_actor_only = True
         # 同时重置 Adam，避免旧 reward 的优化器动量污染新阶段。
-        # load_optimizer = False
-        # load_run = "Aug04_18-29-13_stage1_v2_8.4"
-        # checkpoint = 500
+        load_optimizer = True
+        load_run = "Aug05_17-03-17_stage1_v2_8.5"
+        checkpoint = 400
